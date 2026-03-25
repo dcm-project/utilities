@@ -1,0 +1,24 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get changed files
+        id: changed
+        uses: tj-actions/changed-files@v45
+        with:
+          files: "**/*.sh"
+
+      - name: Run ShellCheck
+        if: steps.changed.outputs.any_changed == 'true'
+        run: shellcheck ${{ steps.changed.outputs.all_changed_files }}
