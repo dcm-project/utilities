@@ -39,6 +39,7 @@ Options:
   --kubevirt-service-provider    Enable the kubevirt service provider
   --kubeconfig PATH              Path to kubeconfig file (required for --kubevirt-service-provider)
   --kubevirt-vm-namespace NS     Kubevirt namespace for VMs (default: vms)
+  --cleanup-on-failure           Tear down the stack automatically if deployment fails (default: leave for debugging)
   --running-versions             Print versions of all running containers and write dcm-versions.json
   --tear-down                    Stop the stack, remove volumes, and clean the deploy directory
   --help                         Show this help message
@@ -317,6 +318,7 @@ API_GATEWAY_BRANCH="${API_GATEWAY_BRANCH:-${DEFAULT_API_GATEWAY_BRANCH}}"
 API_GATEWAY_TMP_DIR="${API_GATEWAY_TMP_DIR:-${DEFAULT_API_GATEWAY_TMP_DIR}}"
 TEAR_DOWN=false
 RUNNING_VERSIONS=false
+CLEANUP_ON_FAILURE=false
 ENABLE_KUBEVIRT=false
 DCM_KUBECONFIG="${KUBECONFIG:-}"
 DCM_VM_NAMESPACE="${KUBEVIRT_VM_NAMESPACE:-vms}"
@@ -349,6 +351,8 @@ while [[ $# -gt 0 ]]; do
         --kubevirt-vm-namespace)
             require_arg "$1" "${2:-}"
             DCM_VM_NAMESPACE="${2:-}"; shift 2 ;;
+        --cleanup-on-failure)
+            CLEANUP_ON_FAILURE=true; shift ;;
         --running-versions)
             RUNNING_VERSIONS=true; shift ;;
         --tear-down)
@@ -416,6 +420,10 @@ log "Cloning api-gateway (repo=${API_GATEWAY_REPO}, branch=${API_GATEWAY_BRANCH}
 git clone --branch "${API_GATEWAY_BRANCH}" --single-branch --depth 1 "${API_GATEWAY_REPO}" "${API_GATEWAY_TMP_DIR}"
 
 # --- Deploy ---------------------------------------------------------------- #
+
+if [[ "${CLEANUP_ON_FAILURE}" == true ]]; then
+    trap 'err "Deploy failed — cleaning up"; tear_down "${API_GATEWAY_TMP_DIR}" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}' ERR
+fi
 
 log "Starting DCM stack"
 if [[ "${ENABLE_KUBEVIRT}" == true ]]; then

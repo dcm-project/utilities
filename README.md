@@ -49,7 +49,10 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 # 2. Deploy with the KubeVirt service provider
 ./scripts/deploy-dcm.sh --kubevirt-service-provider --kubeconfig ~/.kube/config
 
-# 3. Tear down when done
+# 3. Deploy with automatic cleanup on failure
+./scripts/deploy-dcm.sh --cleanup-on-failure
+
+# 4. Tear down when done
 ./scripts/deploy-dcm.sh --tear-down
 ```
 

@@ -27,7 +27,7 @@ Deploys the full DCM stack for E2E testing by cloning api-gateway (which owns `c
 **Flow:** clone api-gateway → `podman-compose up -d` → verify containers running → poll `/api/v1alpha1/health/*` endpoints → collect container versions from Quay.io API → write `dcm-versions.json`.
 
 **Modes:** The script has three mutually exclusive modes:
-- **Deploy** (default): full clone + bring-up + health check
+- **Deploy** (default): full clone + bring-up + health check. Pass `--cleanup-on-failure` to auto-teardown on error (default leaves partial state for debugging).
 - `--running-versions`: query already-running containers, resolve git SHAs via Quay.io API, write `dcm-versions.json`
 - `--tear-down`: stop containers, remove volumes, delete deploy directory
 
