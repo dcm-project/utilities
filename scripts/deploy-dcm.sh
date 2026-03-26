@@ -114,6 +114,22 @@ tear_down() {
         info "Stopping containers and removing volumes..."
         # Use all profiles so every service (including optional ones) is stopped
         podman-compose -f "${deploy_dir}/compose.yaml" ${compose_profiles[@]+"${compose_profiles[@]}"} down -v 2>/dev/null || true
+
+        # podman-compose down can leave orphans when containers have dependency
+        # chains (e.g. healthcheck depends_on). Force-remove any stragglers.
+        local project_name
+        project_name=$(basename "${deploy_dir}")
+        local remaining
+        remaining=$(podman ps -a --filter "name=${project_name}_" --format '{{.ID}}' 2>/dev/null || true)
+        if [[ -n "${remaining}" ]]; then
+            info "Force-removing remaining containers..."
+            echo "${remaining}" | xargs -r podman rm -f 2>/dev/null || true
+        fi
+
+        # Clean up pod and network that compose may have created
+        podman pod ls --filter "name=${project_name}" --format '{{.ID}}' 2>/dev/null | xargs -r podman pod rm -f 2>/dev/null || true
+        podman network rm -f "${project_name}_default" 2>/dev/null || true
+
         info "Removing deploy directory: ${deploy_dir}"
         rm -rf "${deploy_dir}"
     fi
