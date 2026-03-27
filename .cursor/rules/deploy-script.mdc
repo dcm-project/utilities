@@ -1,0 +1,33 @@
+---
+description: Rules for working with the DCM deploy script
+globs: ["scripts/deploy-dcm.sh"]
+alwaysApply: false
+---
+
+# Deploy Script Rules
+
+See `CLAUDE.md` → "Key Script: scripts/deploy-dcm.sh" for the full description, modes, and function table.
+
+## When Editing
+- Preserve the section-banner organization
+- New functions go above the argument parsing section
+- New flags need entries in both `usage()` and the `while/case` loop
+- Add corresponding environment variable overrides where appropriate
+- Run `shellcheck scripts/deploy-dcm.sh` after changes
+
+## Podman / Compose
+
+```bash
+# Bounded log reads (never use --follow)
+podman logs --tail=50 <container>
+podman-compose -f compose.yaml logs --tail=50 <service>
+
+# Status snapshots
+podman-compose -f compose.yaml ps
+podman ps --format 'table {{.Names}}\t{{.Status}}'
+```
+
+## NEVER Do These
+1. **NEVER remove `set -euo pipefail`**
+2. **NEVER use unquoted variables**
+3. **NEVER remove the `validate_deploy_dir` safety check**

@@ -1,0 +1,29 @@
+---
+description: Project structure and conventions for DCM Utilities
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Project Overview
+
+DCM Utilities — shared scripts and tooling for the [dcm-project](https://github.com/dcm-project) ecosystem.
+Currently houses the E2E deploy script; will also contain the E2E test suite.
+
+**For non-Cursor environments:** See `CLAUDE.md` at project root for consolidated context.
+
+## Key Directories
+- `scripts/` - Shell scripts (deploy, teardown, health checks)
+- `.github/workflows/` - CI configuration (ShellCheck linting)
+- `.cursor/rules/` - AI context rules (auto-loaded by Cursor)
+- `.cursor/prompts/` - Task-specific guides (use with `@` in Cursor)
+
+## Important
+This repo contains **bash scripts, not Go code**. There is no build step or compiled output.
+
+## Available Prompts
+Use `@<prompt-name>` in Cursor to include task-specific context:
+- `@deploy-dcm` - Deploy the full DCM stack
+- `@tear-down` - Tear down a running DCM deployment
+- `@check-versions` - Get running container versions
+- `@troubleshoot-deploy` - Diagnose deployment issues
+- `@maintain-pr-summary` - Maintain a running PR summary document

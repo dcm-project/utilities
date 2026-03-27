@@ -1,0 +1,22 @@
+---
+description: Bash coding conventions for all shell scripts
+globs: ["scripts/*.sh", "**/*.sh"]
+alwaysApply: false
+---
+
+# Shell Conventions
+
+See `CLAUDE.md` → "Shell Conventions" for the full list (logging helpers, argument parsing, array safety, etc.). The rules below supplement that section.
+
+## Additional Style Rules
+- Variables must be quoted: `"${var}"`, not `$var`
+- Use `[[ ]]` for conditionals, not `[ ]`
+- Subshells with `$()`, not backticks
+- Shebang is always `#!/usr/bin/env bash`
+
+## Linting
+Validate all scripts with ShellCheck before committing:
+```bash
+shellcheck scripts/*.sh
+```
+CI runs ShellCheck on changed `*.sh` files via `.github/workflows/lint.yaml`.

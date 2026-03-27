@@ -8,9 +8,13 @@ DCM Utilities — a shared repository for common scripts and tooling used across
 
 This repo contains **bash scripts, not Go code**. There is no build step or compiled output.
 
+## Cursor Integration
+
+This repo includes `.cursor/` with rules, prompts, and agents for Cursor IDE. When using Cursor, context is loaded automatically from `.cursor/rules/` and task-specific prompts are available via `@<prompt-name>`. See `.cursor/prompts/README.md` for the full list.
+
 ## Important: Keep Docs Up to Date
 
-When making changes in a PR, always check whether `CLAUDE.md` and `README.md` need updating to reflect the change. This includes new flags, changed behavior, new scripts, or modified conventions. Update both files as part of the same PR.
+When making changes in a PR, always check whether `CLAUDE.md`, `README.md`, and relevant `.cursor/` files need updating to reflect the change. This includes new flags, changed behavior, new scripts, or modified conventions. Update all affected files as part of the same PR.
 
 ## Linting
 

@@ -58,6 +58,19 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
+## Cursor Integration
+
+This repo includes configuration for [Cursor](https://cursor.sh) and [Claude Code](https://claude.ai/code):
+
+| Path | Purpose |
+|------|---------|
+| `CLAUDE.md` | Consolidated project context (works in any AI tool) |
+| `.cursor/rules/` | Auto-loaded context rules for Cursor |
+| `.cursor/prompts/` | Task-specific prompt templates (use `@<name>` in Cursor) |
+| `.cursor/agents/` | Specialized agent definitions |
+
+Available prompts: `@deploy-dcm`, `@tear-down`, `@check-versions`, `@troubleshoot-deploy`, `@maintain-pr-summary`.
+
 ## Development
 
 ### Linting
