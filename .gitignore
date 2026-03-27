@@ -1,6 +1,9 @@
 # Deploy artifacts
 dcm-versions.json
 
+# Cursor-generated working files
+PR-SUMMARY-*.md
+
 # Editor / IDE
 *.swp
 *.swo
