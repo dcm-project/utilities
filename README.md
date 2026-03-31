@@ -8,6 +8,7 @@ Common scripts and tooling shared across the [DCM](https://github.com/dcm-projec
 |------|-------------|
 | `scripts/deploy-dcm.sh` | Deploy, health-check, and tear down the full DCM stack via podman-compose |
 | `scripts/dcm-versions.json` | Example output of container version resolution |
+| `test-plans/` | E2E test plans and results for DCM service providers |
 
 ### `dcm-versions.json`
 
@@ -38,21 +39,26 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 ### Prerequisites
 
 - `git`, `podman`, `podman-compose`, `curl`, `jq`
-- `oc` (only when enabling the KubeVirt service provider)
+- `oc` (for KubeVirt provider; also used for `oc login` auth)
+- `oc` or `kubectl` (for k8s container provider — either works)
 
 ### Quick Start
 
 ```bash
-# 1. Deploy the full DCM stack
+# 1. Deploy the full DCM stack (no providers)
 ./scripts/deploy-dcm.sh
 
-# 2. Deploy with the KubeVirt service provider
+# 2. Deploy with the k8s container service provider (auto-detects cluster)
+./scripts/deploy-dcm.sh --k8s-container-service-provider
+
+# 3. Deploy with KubeVirt + explicit kubeconfig
 ./scripts/deploy-dcm.sh --kubevirt-service-provider --kubeconfig ~/.kube/config
 
-# 3. Deploy with automatic cleanup on failure
-./scripts/deploy-dcm.sh --cleanup-on-failure
+# 4. Deploy all providers, logging in via oc
+./scripts/deploy-dcm.sh --all-service-providers \
+    --cluster-api https://api.cluster.example.com --cluster-password secret
 
-# 4. Tear down when done
+# 5. Tear down when done
 ./scripts/deploy-dcm.sh --tear-down
 ```
 

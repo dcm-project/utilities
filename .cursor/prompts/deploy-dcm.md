@@ -5,7 +5,8 @@ Deploy the full DCM stack for E2E testing using `scripts/deploy-dcm.sh`.
 ## Prerequisites
 
 1. **Required tools**: `git`, `podman`, `podman-compose`, `curl`, `jq`
-2. **Optional**: `oc` (only for KubeVirt service provider)
+2. **For KubeVirt provider**: `oc` (OCP cluster with CNV installed)
+3. **For k8s container provider**: `oc` or `kubectl` (any Kubernetes cluster)
 
 ## Commands
 
@@ -34,6 +35,15 @@ Deploy the full DCM stack for E2E testing using `scripts/deploy-dcm.sh`.
 ./scripts/deploy-dcm.sh --cleanup-on-failure
 ```
 
+### Deploy with k8s Container Service Provider
+```bash
+# Auto-detects cluster from existing oc/kubectl session
+./scripts/deploy-dcm.sh --k8s-container-service-provider
+
+# With explicit kubeconfig
+./scripts/deploy-dcm.sh --k8s-container-service-provider --kubeconfig ~/.kube/config
+```
+
 ### Deploy with KubeVirt Service Provider
 ```bash
 ./scripts/deploy-dcm.sh --kubevirt-service-provider --kubeconfig ~/.kube/config
@@ -44,6 +54,25 @@ Deploy the full DCM stack for E2E testing using `scripts/deploy-dcm.sh`.
 ./scripts/deploy-dcm.sh --all-service-providers --kubeconfig ~/.kube/config
 ```
 
+### Deploy with oc login Credentials
+```bash
+./scripts/deploy-dcm.sh --all-service-providers \
+    --cluster-api https://api.cluster.example.com \
+    --cluster-password mypassword
+
+# Or via environment variables
+OPENSHIFT_API=https://api.cluster.example.com \
+OPENSHIFT_PASSWORD=mypassword \
+./scripts/deploy-dcm.sh --kubevirt-service-provider
+```
+
+## Cluster Authentication
+
+When any service provider is enabled, the script resolves cluster access in this order:
+1. Explicit `--kubeconfig PATH` (or `KUBECONFIG` env var)
+2. Existing `oc`/`kubectl` session (auto-detected)
+3. `oc login` with `--cluster-api` + `--cluster-password`
+
 ## Environment Variable Overrides
 
 | Variable | Flag equivalent |
@@ -53,6 +82,10 @@ Deploy the full DCM stack for E2E testing using `scripts/deploy-dcm.sh`.
 | `API_GATEWAY_TMP_DIR` | `--api-gateway-dir` |
 | `KUBECONFIG` | `--kubeconfig` |
 | `KUBEVIRT_VM_NAMESPACE` | `--kubevirt-vm-namespace` |
+| `K8S_CONTAINER_SP_NAMESPACE` | `--k8s-container-namespace` |
+| `OPENSHIFT_API` | `--cluster-api` |
+| `OPENSHIFT_USERNAME` | `--cluster-username` |
+| `OPENSHIFT_PASSWORD` | `--cluster-password` |
 
 Flags take precedence over environment variables.
 

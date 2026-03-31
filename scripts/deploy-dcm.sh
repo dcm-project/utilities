@@ -21,6 +21,14 @@ readonly HEALTH_ENDPOINTS=(
 
 # Supported providers and their compose profile names
 readonly PROVIDER_KUBEVIRT="kubevirt"
+readonly PROVIDER_K8S_CONTAINER="k8s-container"
+
+# Compose variable contract — these names are defined in api-gateway's compose.yaml.
+# If the compose file renames them, these exports must be updated to match.
+#   KUBEVIRT_KUBECONFIG          → volume mount for kubevirt SP container
+#   KUBEVIRT_NAMESPACE           → KUBERNETES_NAMESPACE inside kubevirt SP
+#   K8S_CONTAINER_SP_KUBECONFIG  → volume mount for k8s container SP
+#   K8S_CONTAINER_SP_NAMESPACE   → SP_K8S_NAMESPACE inside k8s container SP
 
 # --- Usage ----------------------------------------------------------------- #
 
@@ -37,12 +45,23 @@ Options:
   --api-gateway-dir PATH         Directory to clone api-gateway into (default: ${DEFAULT_API_GATEWAY_TMP_DIR})
   --all-service-providers        Enable all available service providers
   --kubevirt-service-provider    Enable the kubevirt service provider
-  --kubeconfig PATH              Path to kubeconfig file (required for --kubevirt-service-provider)
+  --k8s-container-service-provider  Enable the k8s container service provider
+  --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted)
   --kubevirt-vm-namespace NS     Kubevirt namespace for VMs (default: vms)
+  --k8s-container-namespace NS   Namespace for container workloads (default: default)
+  --cluster-api URL              OpenShift API URL for oc login
+  --cluster-username USER        Username for oc login (default: kubeadmin)
+  --cluster-password PASS        Password for oc login
   --cleanup-on-failure           Tear down the stack automatically if deployment fails (default: leave for debugging)
   --running-versions             Print versions of all running containers and write dcm-versions.json
   --tear-down                    Stop the stack, remove volumes, and clean the deploy directory
   --help                         Show this help message
+
+Cluster authentication (when any service provider is enabled):
+  The script resolves cluster credentials in this order:
+    1. Explicit --kubeconfig PATH (or KUBECONFIG env var)
+    2. Existing oc/kubectl session (oc whoami or kubectl cluster-info)
+    3. oc login with --cluster-api + --cluster-password
 
 Environment variables (flags take precedence):
   API_GATEWAY_REPO          Same as --api-gateway-repo
@@ -50,13 +69,17 @@ Environment variables (flags take precedence):
   API_GATEWAY_TMP_DIR       Same as --api-gateway-dir
   KUBECONFIG                Same as --kubeconfig
   KUBEVIRT_VM_NAMESPACE     Same as --kubevirt-vm-namespace (default: vms)
+  K8S_CONTAINER_SP_NAMESPACE  Same as --k8s-container-namespace (default: default)
+  OPENSHIFT_API             Same as --cluster-api
+  OPENSHIFT_USERNAME        Same as --cluster-username (default: kubeadmin)
+  OPENSHIFT_PASSWORD        Same as --cluster-password
 
 Examples:
   $(basename "$0")
   $(basename "$0") --api-gateway-branch feature-x
-  $(basename "$0") --api-gateway-repo https://github.com/myfork/api-gateway.git
-  $(basename "$0") --kubevirt-service-provider
-  $(basename "$0") --all-service-providers
+  $(basename "$0") --kubevirt-service-provider --kubeconfig ~/.kube/config
+  $(basename "$0") --k8s-container-service-provider
+  $(basename "$0") --all-service-providers --cluster-api https://api.cluster.example.com --cluster-password secret
   $(basename "$0") --tear-down
   $(basename "$0") --running-versions
 EOF
@@ -176,6 +199,83 @@ validate_kubevirt_provider() {
         oc --kubeconfig="${kubeconfig}" create namespace "${vm_namespace}"
     fi
     info "Namespace '${vm_namespace}' is ready"
+}
+
+validate_k8s_container_provider() {
+    local kubeconfig="$1"
+    local namespace="$2"
+    local cli="$3"
+
+    log "Validating k8s container provider prerequisites"
+
+    if [[ -z "${kubeconfig}" ]]; then
+        err "Kubeconfig is required when k8s container provider is enabled"
+        return 1
+    fi
+
+    if [[ ! -f "${kubeconfig}" ]]; then
+        err "Kubeconfig file not found: ${kubeconfig}"
+        return 1
+    fi
+
+    info "Verifying cluster connectivity (using ${cli})..."
+    if ! "${cli}" --kubeconfig="${kubeconfig}" cluster-info &>/dev/null; then
+        err "Cannot connect to cluster using kubeconfig: ${kubeconfig}"
+        err "Verify the kubeconfig is valid and the cluster is reachable"
+        return 1
+    fi
+    info "Cluster is reachable"
+
+    info "Ensuring namespace '${namespace}' exists..."
+    if ! "${cli}" --kubeconfig="${kubeconfig}" get namespace "${namespace}" &>/dev/null; then
+        info "Creating namespace '${namespace}'..."
+        "${cli}" --kubeconfig="${kubeconfig}" create namespace "${namespace}"
+    fi
+    info "Namespace '${namespace}' is ready"
+}
+
+# --- Cluster authentication ------------------------------------------------ #
+
+resolve_kubeconfig() {
+    # 1. Explicit kubeconfig path (--kubeconfig or KUBECONFIG env)
+    if [[ -n "${DCM_KUBECONFIG}" ]]; then
+        if [[ ! -f "${DCM_KUBECONFIG}" ]]; then
+            err "Kubeconfig file not found: ${DCM_KUBECONFIG}"
+            return 1
+        fi
+        info "Using kubeconfig: ${DCM_KUBECONFIG}"
+        return 0
+    fi
+
+    # 2. Existing session — prefer oc, fall back to kubectl
+    if command -v oc &>/dev/null && oc whoami &>/dev/null; then
+        DCM_KUBECONFIG="${HOME}/.kube/config"
+        info "Using existing oc session ($(oc whoami))"
+        return 0
+    elif command -v kubectl &>/dev/null && kubectl cluster-info &>/dev/null 2>&1; then
+        DCM_KUBECONFIG="${HOME}/.kube/config"
+        info "Using existing kubectl context"
+        return 0
+    fi
+
+    # 3. oc login with provided credentials
+    if [[ -n "${OPENSHIFT_API:-}" ]] && [[ -n "${OPENSHIFT_PASSWORD:-}" ]]; then
+        if ! command -v oc &>/dev/null; then
+            err "'oc' is required for --cluster-api login"
+            return 1
+        fi
+        info "Logging in to ${OPENSHIFT_API}..."
+        oc login "${OPENSHIFT_API}" \
+            --username="${OPENSHIFT_USERNAME:-kubeadmin}" \
+            --password="${OPENSHIFT_PASSWORD}"
+        DCM_KUBECONFIG="${HOME}/.kube/config"
+        info "Logged in as $(oc whoami)"
+        return 0
+    fi
+
+    err "No cluster credentials found. Provide --kubeconfig, set KUBECONFIG,"
+    err "log in with 'oc login', or set OPENSHIFT_API + OPENSHIFT_PASSWORD."
+    return 1
 }
 
 # --- Health verification --------------------------------------------------- #
@@ -336,8 +436,13 @@ TEAR_DOWN=false
 RUNNING_VERSIONS=false
 CLEANUP_ON_FAILURE=false
 ENABLE_KUBEVIRT=false
+ENABLE_K8S_CONTAINER=false
 DCM_KUBECONFIG="${KUBECONFIG:-}"
 DCM_VM_NAMESPACE="${KUBEVIRT_VM_NAMESPACE:-vms}"
+DCM_CONTAINER_NAMESPACE="${K8S_CONTAINER_SP_NAMESPACE:-default}"
+OPENSHIFT_API="${OPENSHIFT_API:-}"
+OPENSHIFT_USERNAME="${OPENSHIFT_USERNAME:-kubeadmin}"
+OPENSHIFT_PASSWORD="${OPENSHIFT_PASSWORD:-}"
 
 require_arg() {
     if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
@@ -358,15 +463,29 @@ while [[ $# -gt 0 ]]; do
             require_arg "$1" "${2:-}"
             API_GATEWAY_TMP_DIR="${2:-}"; shift 2 ;;
         --all-service-providers)
-            ENABLE_KUBEVIRT=true; shift ;;
+            ENABLE_KUBEVIRT=true; ENABLE_K8S_CONTAINER=true; shift ;;
         --kubevirt-service-provider)
             ENABLE_KUBEVIRT=true; shift ;;
+        --k8s-container-service-provider)
+            ENABLE_K8S_CONTAINER=true; shift ;;
         --kubeconfig)
             require_arg "$1" "${2:-}"
             DCM_KUBECONFIG="${2:-}"; shift 2 ;;
         --kubevirt-vm-namespace)
             require_arg "$1" "${2:-}"
             DCM_VM_NAMESPACE="${2:-}"; shift 2 ;;
+        --k8s-container-namespace)
+            require_arg "$1" "${2:-}"
+            DCM_CONTAINER_NAMESPACE="${2:-}"; shift 2 ;;
+        --cluster-api)
+            require_arg "$1" "${2:-}"
+            OPENSHIFT_API="${2:-}"; shift 2 ;;
+        --cluster-username)
+            require_arg "$1" "${2:-}"
+            OPENSHIFT_USERNAME="${2:-}"; shift 2 ;;
+        --cluster-password)
+            require_arg "$1" "${2:-}"
+            OPENSHIFT_PASSWORD="${2:-}"; shift 2 ;;
         --cleanup-on-failure)
             CLEANUP_ON_FAILURE=true; shift ;;
         --running-versions)
@@ -387,6 +506,9 @@ validate_deploy_dir "${API_GATEWAY_TMP_DIR}" || exit 1
 COMPOSE_PROFILES=()
 if [[ "${ENABLE_KUBEVIRT}" == true ]]; then
     COMPOSE_PROFILES+=("--profile" "${PROVIDER_KUBEVIRT}")
+fi
+if [[ "${ENABLE_K8S_CONTAINER}" == true ]]; then
+    COMPOSE_PROFILES+=("--profile" "${PROVIDER_K8S_CONTAINER}")
 fi
 
 # --- Running versions (standalone) ----------------------------------------- #
@@ -411,15 +533,37 @@ if [[ "${ENABLE_KUBEVIRT}" == true ]]; then
     REQUIRED_TOOLS+=(oc)
 fi
 
+K8S_CLI=""
+if [[ "${ENABLE_K8S_CONTAINER}" == true ]]; then
+    if command -v oc &>/dev/null; then
+        K8S_CLI="oc"
+    elif command -v kubectl &>/dev/null; then
+        K8S_CLI="kubectl"
+    else
+        REQUIRED_TOOLS+=(oc)
+    fi
+fi
+
 check_required_tools "${REQUIRED_TOOLS[@]}" || exit 1
 info "All prerequisites found: ${REQUIRED_TOOLS[*]}"
+
+# Resolve cluster credentials when any provider is enabled
+if [[ "${ENABLE_KUBEVIRT}" == true ]] || [[ "${ENABLE_K8S_CONTAINER}" == true ]]; then
+    resolve_kubeconfig || exit 1
+fi
 
 if [[ "${ENABLE_KUBEVIRT}" == true ]]; then
     validate_kubevirt_provider "${DCM_KUBECONFIG}" "${DCM_VM_NAMESPACE}" || exit 1
 
-    # Export as KUBERNETES_* for compose.yaml substitution
-    export KUBERNETES_KUBECONFIG="${DCM_KUBECONFIG}"
-    export KUBERNETES_NAMESPACE="${DCM_VM_NAMESPACE}"
+    export KUBEVIRT_KUBECONFIG="${DCM_KUBECONFIG}"
+    export KUBEVIRT_NAMESPACE="${DCM_VM_NAMESPACE}"
+fi
+
+if [[ "${ENABLE_K8S_CONTAINER}" == true ]]; then
+    validate_k8s_container_provider "${DCM_KUBECONFIG}" "${DCM_CONTAINER_NAMESPACE}" "${K8S_CLI}" || exit 1
+
+    export K8S_CONTAINER_SP_KUBECONFIG="${DCM_KUBECONFIG}"
+    export K8S_CONTAINER_SP_NAMESPACE="${DCM_CONTAINER_NAMESPACE}"
 fi
 
 # --- Clone ----------------------------------------------------------------- #
@@ -442,8 +586,11 @@ if [[ "${CLEANUP_ON_FAILURE}" == true ]]; then
 fi
 
 log "Starting DCM stack"
-if [[ "${ENABLE_KUBEVIRT}" == true ]]; then
-    info "Enabled providers: kubevirt"
+ENABLED_PROVIDERS=()
+[[ "${ENABLE_KUBEVIRT}" == true ]] && ENABLED_PROVIDERS+=("kubevirt")
+[[ "${ENABLE_K8S_CONTAINER}" == true ]] && ENABLED_PROVIDERS+=("k8s-container")
+if [[ ${#ENABLED_PROVIDERS[@]} -gt 0 ]]; then
+    info "Enabled providers: ${ENABLED_PROVIDERS[*]}"
 fi
 podman-compose -f "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} up -d
 
