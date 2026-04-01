@@ -1,5 +1,13 @@
 # Deploy artifacts
 dcm-versions.json
+dcm-cli-version.json
+
+# Go test binary and JUnit reports
+tests/e2e/*.test
+*.xml
+
+# Downloaded CLI binary
+bin/
 
 # Cursor-generated working files
 PR-SUMMARY-*.md
