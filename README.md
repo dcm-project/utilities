@@ -1,13 +1,16 @@
 # DCM Utilities
 
-Common scripts and tooling shared across the [DCM](https://github.com/dcm-project) ecosystem. This repository currently provides the E2E deploy script for bringing up the full DCM stack locally. An E2E test suite will be added in the future.
+Common scripts and tooling shared across the [DCM](https://github.com/dcm-project) ecosystem. Provides the E2E deploy script for bringing up the full DCM stack locally and a Ginkgo/Gomega E2E test suite that validates the stack through the API gateway and DCM CLI.
 
 ## Contents
 
 | Path | Description |
 |------|-------------|
 | `scripts/deploy-dcm.sh` | Deploy, health-check, and tear down the full DCM stack via podman-compose |
-| `scripts/dcm-versions.json` | Example output of container version resolution |
+| `dcm-versions.json` | Example output of container version resolution (gitignored) |
+| `tests/run-e2e.sh` | Test harness: deploy, run tests, teardown |
+| `tests/e2e/` | Ginkgo/Gomega E2E test suite |
+| `Makefile` | Convenience targets (`make help` to list all) |
 
 ### `dcm-versions.json`
 
@@ -57,6 +60,62 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 ```
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
+
+## E2E Tests
+
+The test suite uses [Ginkgo](https://onsi.github.io/ginkgo/) and [Gomega](https://onsi.github.io/gomega/) to validate the full DCM stack through the API gateway and the DCM CLI.
+
+### Quick Start
+
+```bash
+# One command: deploy the stack, run all tests, tear down
+make test-e2e-full
+```
+
+This runs the full lifecycle via `tests/run-e2e.sh`: deploys the DCM stack with `podman-compose`, auto-downloads the CLI binary from GitHub releases, executes all E2E tests (health checks, API CRUD, CLI commands), and tears down afterward.
+
+### Step-by-Step
+
+```bash
+make e2e-up        # Deploy the stack
+make test-e2e      # Run all tests (stack must be running)
+make test-smoke    # Run health checks + CLI version only
+make test-cli      # Run CLI tests only
+make e2e-down      # Tear down
+make download-cli  # Download latest DCM CLI without running tests
+
+# See all targets
+make help
+```
+
+### Prerequisites
+
+- Go 1.23+
+- `podman`, `podman-compose`, `curl`, `jq`, `git`
+- `gh` CLI ([cli.github.com](https://cli.github.com)) — for auto-downloading the DCM CLI binary
+- **DCM CLI binary** (for CLI tests) — auto-downloaded from [GitHub releases](https://github.com/dcm-project/cli/releases), or set `DCM_CLI_PATH`
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DCM_GATEWAY_URL` | `http://localhost:9080/api/v1alpha1` | API gateway base URL |
+| `DCM_CLI_PATH` | (auto-resolved) | Path to `dcm` CLI binary |
+| `JUNIT_REPORT` | (none) | JUnit XML report filename (e.g. `make test-e2e JUNIT_REPORT=results.xml`) |
+
+### Test Harness Flags
+
+The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained control:
+
+```bash
+./tests/run-e2e.sh --skip-deploy              # Stack is already running
+./tests/run-e2e.sh --skip-teardown            # Leave stack running after tests
+./tests/run-e2e.sh --skip-cli                 # Skip CLI binary resolution
+./tests/run-e2e.sh --dcm-cli-path ~/bin/dcm   # Use a specific CLI binary
+./tests/run-e2e.sh --label-filter smoke        # Run only smoke tests
+./tests/run-e2e.sh --gateway-url http://...    # Override gateway URL
+./tests/run-e2e.sh --junit-report results.xml  # Write JUnit XML report
+```
 
 ## Cursor Integration
 
