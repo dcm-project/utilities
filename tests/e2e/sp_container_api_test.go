@@ -222,6 +222,43 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 		})
 	})
 
+	// Verify the SP's label selector excludes non-DCM Deployments.
+	Context("label filtering", Label("cluster"), Ordered, func() {
+		manualDeployName := uniqueName("e2e-manual")
+
+		BeforeAll(func() {
+			requireKubectl()
+		})
+
+		AfterAll(func() {
+			_, _ = runKubectl("delete", "deployment", manualDeployName, "--ignore-not-found")
+		})
+
+		It("excludes non-DCM Deployments from list", func() {
+			By("creating a Deployment without DCM labels via kubectl")
+			_, err := runKubectl("create", "deployment", manualDeployName, "--image=docker.io/library/nginx:alpine")
+			Expect(err).NotTo(HaveOccurred())
+
+			By("listing containers via the SP API")
+			resp, err := doContainerSPRequest(http.MethodGet, "/containers", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var body map[string]interface{}
+			decodeJSON(resp, &body)
+			containers, _ := body["containers"].([]interface{})
+
+			for _, c := range containers {
+				container := c.(map[string]interface{})
+				spec, _ := container["spec"].(map[string]interface{})
+				meta, _ := spec["metadata"].(map[string]interface{})
+				name, _ := meta["name"].(string)
+				Expect(name).NotTo(Equal(manualDeployName),
+					"non-DCM Deployment %q should not appear in SP list", manualDeployName)
+			}
+		})
+	})
+
 	Context("delete lifecycle", Ordered, func() {
 		var deleteID string
 

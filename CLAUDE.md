@@ -126,6 +126,8 @@ All test targets support JUnit XML output: `make test-e2e JUNIT_REPORT=results.x
 |-------|--------------|-------|
 | **API tests** | HTTP CRUD operations against the gateway | (none) |
 | **SP tests** | Container SP direct API + NATS status events | `sp`, `container` |
+| **Cluster tests** | Tests requiring `kubectl`/`oc` cluster access | `cluster` |
+| **Disruptive tests** | Tests that stop/start infrastructure (e.g. NATS) | `disruptive` |
 | **CLI tests** | DCM CLI binary against the live stack | `cli` |
 | **Smoke tests** | Health checks + CLI version (quick validation) | `smoke` |
 
@@ -148,8 +150,10 @@ CLI tests are skipped (not failed) if no binary is available.
 - `DCM_CONTAINER_SP_URL` env var overrides the container SP endpoint (default: `http://localhost:8082/api/v1alpha1`)
 - `DCM_NATS_URL` env var overrides the NATS server (default: `nats://localhost:4222`)
 - `DCM_CLI_PATH` env var specifies the CLI binary path
-- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `nats`) enable selective test runs via `--label-filter`
+- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `nats`, `cluster`, `disruptive`) enable selective test runs via `--label-filter`
 - SP tests skip gracefully if the container SP isn't reachable (no hard failure)
+- Cluster tests skip gracefully if `kubectl`/`oc` is unavailable or the cluster is unreachable
+- Disruptive tests skip if `podman` is unavailable; exclude from normal runs with `--label-filter '!disruptive'`
 
 ## `dcm-versions.json`
 

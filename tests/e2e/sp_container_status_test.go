@@ -5,8 +5,10 @@ package e2e_test
 import (
 	"fmt"
 	"net/http"
+	"os/exec"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -89,16 +91,19 @@ var _ = Describe("Container SP Status Events", Label("sp", "container", "nats"),
 			Expect(getBody["status"]).To(Equal("RUNNING"))
 		})
 
-		It("includes PENDING in event history before RUNNING", func() {
+		// PENDING may be debounced away if the Pod starts quickly (cached image).
+		// Verify the event sequence only contains valid statuses and ends with RUNNING.
+		It("has a valid status progression ending in RUNNING", func() {
 			events := collector.EventsForInstance(containerID)
-			statuses := make([]string, 0, len(events))
+			Expect(events).NotTo(BeEmpty())
+
+			validStatuses := map[string]bool{"PENDING": true, "RUNNING": true}
 			for _, e := range events {
-				if s, ok := e.Data["status"].(string); ok {
-					statuses = append(statuses, s)
-				}
+				s, _ := e.Data["status"].(string)
+				Expect(validStatuses).To(HaveKey(s), "unexpected status %q in event history", s)
 			}
-			Expect(statuses).To(ContainElement("PENDING"), "should see PENDING before RUNNING")
-			Expect(statuses).To(ContainElement("RUNNING"), "should see RUNNING")
+			last := events[len(events)-1]
+			Expect(last.Data["status"]).To(Equal("RUNNING"))
 		})
 	})
 
@@ -142,7 +147,12 @@ var _ = Describe("Container SP Status Events", Label("sp", "container", "nats"),
 		})
 	})
 
-	Context("initial status", Ordered, func() {
+	// CrashLoopBackOff does NOT produce FAILED because the SP maps Pod *phase*,
+	// not container-level waiting reasons. With restartPolicy=Always (Deployment
+	// default), the Pod phase stays "Running" even while the container is in
+	// CrashLoopBackOff. The SP would need to inspect ContainerStatuses to detect
+	// this — currently a known limitation (see ReconcileStatus in the SP repo).
+	Context("crashing container", Ordered, func() {
 		var collector *NATSCollector
 		var containerID string
 
@@ -157,7 +167,39 @@ var _ = Describe("Container SP Status Events", Label("sp", "container", "nats"),
 			}
 		})
 
-		It("emits PENDING as the initial status", func() {
+		It("reports RUNNING (not FAILED) for a CrashLoopBackOff container", func() {
+			name := uniqueName("e2e-crash")
+			body := createTestContainer(containerSpecWith(name, "docker.io/library/busybox:latest", containerSpecOpts{
+				command: []string{"false"},
+			}))
+			containerID = body["id"].(string)
+
+			By("waiting for RUNNING status — Pod phase stays Running despite CrashLoopBackOff")
+			evt := collector.WaitForStatus(containerID, "RUNNING", 60*time.Second)
+			Expect(evt.Data["status"]).To(Equal("RUNNING"))
+			Expect(evt.Data["id"]).To(Equal(containerID))
+		})
+	})
+
+	Context("first observed status", Ordered, func() {
+		var collector *NATSCollector
+		var containerID string
+
+		BeforeAll(func() {
+			collector = newNATSCollector(natsStatusSubject)
+		})
+
+		AfterAll(func() {
+			collector.Close()
+			if containerID != "" {
+				deleteTestContainer(containerID)
+			}
+		})
+
+		// The first observed event is PENDING when the Pod takes time to start,
+		// or RUNNING if the image is cached and the Pod starts within the
+		// debounce window (500ms default). Both are valid.
+		It("emits PENDING or RUNNING as the first observed status", func() {
 			name := uniqueName("e2e-init")
 			body := createTestContainer(containerSpec(name, "docker.io/library/nginx:alpine", false))
 			containerID = body["id"].(string)
@@ -167,7 +209,9 @@ var _ = Describe("Container SP Status Events", Label("sp", "container", "nats"),
 			}).WithTimeout(15 * time.Second).WithPolling(1 * time.Second).Should(BeNumerically(">", 0))
 
 			events := collector.EventsForInstance(containerID)
-			Expect(events[0].Data["status"]).To(Equal("PENDING"))
+			first := events[0].Data["status"].(string)
+			Expect(first).To(SatisfyAny(Equal("PENDING"), Equal("RUNNING")),
+				"first event should be either PENDING or RUNNING, got %q", first)
 		})
 	})
 
@@ -206,6 +250,147 @@ var _ = Describe("Container SP Status Events", Label("sp", "container", "nats"),
 				return false
 			}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(BeTrue(),
 				"expected a terminal status event after deletion")
+		})
+	})
+
+	// Non-DCM Deployments should not trigger status events.
+	Context("label filtering", Label("cluster"), Ordered, func() {
+		var collector *NATSCollector
+		manualDeployName := uniqueName("e2e-unlbl")
+
+		BeforeAll(func() {
+			requireKubectl()
+			collector = newNATSCollector(natsStatusSubject)
+		})
+
+		AfterAll(func() {
+			collector.Close()
+			_, _ = runKubectl("delete", "deployment", manualDeployName, "--ignore-not-found")
+		})
+
+		It("does not emit events for non-DCM Deployments", func() {
+			By("creating a Deployment without DCM labels via kubectl")
+			_, err := runKubectl("create", "deployment", manualDeployName, "--image=docker.io/library/nginx:alpine")
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting and confirming no events appear for the manual Deployment")
+			Consistently(func() int {
+				return len(collector.EventsForInstance(manualDeployName))
+			}).WithTimeout(15 * time.Second).WithPolling(2 * time.Second).Should(Equal(0),
+				"no NATS events should be emitted for non-DCM Deployment %s", manualDeployName)
+		})
+	})
+
+	// Scaling a DCM-managed Deployment to zero should produce a status change.
+	Context("scaled to zero", Label("cluster"), Ordered, func() {
+		var collector *NATSCollector
+		var containerID string
+
+		BeforeAll(func() {
+			requireKubectl()
+			collector = newNATSCollector(natsStatusSubject)
+		})
+
+		AfterAll(func() {
+			collector.Close()
+			if containerID != "" {
+				deleteTestContainer(containerID)
+			}
+		})
+
+		It("reflects status change when Deployment is scaled to zero", func() {
+			name := uniqueName("e2e-scale")
+			body := createTestContainer(containerSpec(name, "docker.io/library/nginx:alpine", false))
+			containerID = body["id"].(string)
+
+			By("waiting for RUNNING status")
+			collector.WaitForStatus(containerID, "RUNNING", 60*time.Second)
+
+			By("scaling the Deployment to zero via kubectl")
+			_, err := runKubectl("scale", "deployment", name, "--replicas=0")
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for a non-RUNNING status event")
+			Eventually(func() bool {
+				events := collector.EventsForInstance(containerID)
+				var sawRunning bool
+				for _, e := range events {
+					s, _ := e.Data["status"].(string)
+					if s == "RUNNING" {
+						sawRunning = true
+					}
+					if sawRunning && s != "RUNNING" {
+						return true
+					}
+				}
+				return false
+			}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(BeTrue(),
+				"expected status to change after scaling to zero")
+		})
+	})
+
+	// Verify the SP retries NATS publishes after a transient NATS outage.
+	Context("NATS resilience", Label("disruptive"), Ordered, func() {
+		var containerID string
+
+		BeforeAll(func() {
+			requireContainerSP()
+			requirePodman()
+		})
+
+		AfterAll(func() {
+			if containerID != "" {
+				deleteTestContainer(containerID)
+			}
+		})
+
+		It("delivers status events after NATS restart", func() {
+			natsContainer := findComposeContainer("nats")
+
+			By("creating a container and confirming initial event delivery")
+			name := uniqueName("e2e-nats")
+			body := createTestContainer(containerSpec(name, "docker.io/library/nginx:alpine", false))
+			containerID = body["id"].(string)
+
+			collector1 := newNATSCollector(natsStatusSubject)
+			collector1.WaitForStatus(containerID, "RUNNING", 60*time.Second)
+			collector1.Close()
+
+			By("stopping the NATS container")
+			out, err := exec.Command(podmanBin, "stop", "-t", "5", natsContainer).CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), "failed to stop NATS: %s", string(out))
+
+			By("restarting the NATS container")
+			out, err = exec.Command(podmanBin, "start", natsContainer).CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), "failed to start NATS: %s", string(out))
+
+			By("waiting for NATS to be connectable again")
+			Eventually(func() error {
+				conn, connErr := nats.Connect(natsURL, nats.Timeout(2*time.Second))
+				if connErr != nil {
+					return connErr
+				}
+				conn.Close()
+				return nil
+			}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
+
+			By("subscribing and triggering a new status change")
+			collector2 := newNATSCollector(natsStatusSubject)
+			defer collector2.Close()
+
+			deleteTestContainer(containerID)
+
+			Eventually(func() bool {
+				for _, e := range collector2.EventsForInstance(containerID) {
+					s, _ := e.Data["status"].(string)
+					if s == "DELETED" || s == "TERMINATED" || s == "STOPPED" {
+						return true
+					}
+				}
+				return false
+			}).WithTimeout(60 * time.Second).WithPolling(2 * time.Second).Should(BeTrue(),
+				"expected terminal status event after NATS recovery")
+			containerID = ""
 		})
 	})
 

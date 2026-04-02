@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -105,8 +106,19 @@ func deleteTestContainer(id string) {
 	resp.Body.Close()
 }
 
+// containerSpecOpts configures optional fields for containerSpec.
+type containerSpecOpts struct {
+	ports   bool
+	command []string
+}
+
 // containerSpec returns a JSON body for creating a test container per the OpenAPI schema.
 func containerSpec(name, imageRef string, ports bool) string {
+	return containerSpecWith(name, imageRef, containerSpecOpts{ports: ports})
+}
+
+// containerSpecWith returns a JSON body with full control over optional fields.
+func containerSpecWith(name, imageRef string, opts containerSpecOpts) string {
 	spec := map[string]interface{}{
 		"service_type": "container",
 		"metadata":     map[string]interface{}{"name": name},
@@ -116,11 +128,16 @@ func containerSpec(name, imageRef string, ports bool) string {
 			"memory": map[string]interface{}{"min": "128MB", "max": "256MB"},
 		},
 	}
-	if ports {
+	if opts.ports {
 		spec["network"] = map[string]interface{}{
 			"ports": []map[string]interface{}{
 				{"container_port": 80, "visibility": "internal"},
 			},
+		}
+	}
+	if len(opts.command) > 0 {
+		spec["process"] = map[string]interface{}{
+			"command": opts.command,
 		}
 	}
 	body := map[string]interface{}{"spec": spec}
@@ -215,4 +232,90 @@ func (c *NATSCollector) WaitForStatus(instanceID, status string, timeout time.Du
 	}).WithTimeout(timeout).WithPolling(500 * time.Millisecond).Should(BeTrue(),
 		fmt.Sprintf("timed out waiting for status %q on instance %s", status, instanceID))
 	return matched
+}
+
+// --- Cluster helpers (kubectl/oc) ----------------------------------------- //
+
+var (
+	kubectlBin       string
+	kubectlAvailable bool
+	spNamespace      string
+)
+
+func initKubectl() {
+	spNamespace = os.Getenv("K8S_CONTAINER_SP_NAMESPACE")
+	if spNamespace == "" {
+		spNamespace = "default"
+	}
+
+	for _, bin := range []string{"oc", "kubectl"} {
+		if path, err := exec.LookPath(bin); err == nil {
+			kubectlBin = path
+			break
+		}
+	}
+	if kubectlBin == "" {
+		GinkgoWriter.Println("kubectl/oc not found — cluster-level SP tests will be skipped")
+		return
+	}
+
+	out, err := exec.Command(kubectlBin, "cluster-info").CombinedOutput()
+	if err != nil {
+		GinkgoWriter.Printf("Cluster not reachable via %s: %s — cluster-level SP tests will be skipped\n", kubectlBin, string(out))
+		return
+	}
+	kubectlAvailable = true
+	GinkgoWriter.Printf("Using %s for cluster operations (namespace: %s)\n", kubectlBin, spNamespace)
+}
+
+func requireKubectl() {
+	if !kubectlAvailable {
+		Skip("kubectl/oc not available or cluster not reachable")
+	}
+}
+
+// runKubectl executes a kubectl/oc command and returns stdout.
+func runKubectl(args ...string) (string, error) {
+	fullArgs := append([]string{"-n", spNamespace}, args...)
+	cmd := exec.Command(kubectlBin, fullArgs...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// --- Podman helpers ------------------------------------------------------- //
+
+var (
+	podmanBin       string
+	podmanAvailable bool
+)
+
+func initPodman() {
+	if path, err := exec.LookPath("podman"); err == nil {
+		podmanBin = path
+	} else {
+		GinkgoWriter.Println("podman not found — infrastructure disruption tests will be skipped")
+		return
+	}
+
+	if err := exec.Command(podmanBin, "info").Run(); err != nil {
+		GinkgoWriter.Println("podman not functional — infrastructure disruption tests will be skipped")
+		return
+	}
+	podmanAvailable = true
+	GinkgoWriter.Printf("Using %s for infrastructure tests\n", podmanBin)
+}
+
+func requirePodman() {
+	if !podmanAvailable {
+		Skip("podman not available")
+	}
+}
+
+// findComposeContainer returns the container ID for a compose service name.
+func findComposeContainer(serviceName string) string {
+	out, err := exec.Command(podmanBin, "ps", "--filter", "name="+serviceName, "--format", "{{.ID}}").CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "failed to find container for service %s: %s", serviceName, string(out))
+	id := strings.TrimSpace(string(out))
+	Expect(id).NotTo(BeEmpty(), "no running container found matching %q", serviceName)
+	return strings.Split(id, "\n")[0]
 }

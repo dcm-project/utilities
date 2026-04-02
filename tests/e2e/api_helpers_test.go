@@ -51,6 +51,12 @@ var _ = BeforeSuite(func() {
 
 	// Probe container SP (tests skip gracefully if not deployed).
 	initContainerSP()
+
+	// Resolve cluster CLI for tests that need kubectl/oc.
+	initKubectl()
+
+	// Check podman for infrastructure disruption tests.
+	initPodman()
 })
 
 // doRequest builds a full URL from a relative path, sends the request, and
