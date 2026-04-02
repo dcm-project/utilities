@@ -87,6 +87,7 @@ make e2e-up        # Deploy the stack
 make test-e2e      # Run all tests (stack must be running)
 make test-smoke    # Run health checks + CLI version only
 make test-cli      # Run CLI tests only
+make test-sp       # Run service provider tests (SP must be deployed)
 make e2e-down      # Tear down
 make download-cli  # Download latest DCM CLI without running tests
 
@@ -106,6 +107,8 @@ make help
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DCM_GATEWAY_URL` | `http://localhost:9080/api/v1alpha1` | API gateway base URL |
+| `DCM_CONTAINER_SP_URL` | `http://localhost:8082/api/v1alpha1` | Container SP direct URL (requires published port) |
+| `DCM_NATS_URL` | `nats://localhost:4222` | NATS server URL for status event tests |
 | `DCM_CLI_PATH` | (auto-resolved) | Path to `dcm` CLI binary |
 | `JUNIT_REPORT` | (none) | JUnit XML report filename (e.g. `make test-e2e JUNIT_REPORT=results.xml`) |
 
@@ -121,6 +124,10 @@ The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained
 ./tests/run-e2e.sh --label-filter smoke        # Run only smoke tests
 ./tests/run-e2e.sh --gateway-url http://...    # Override gateway URL
 ./tests/run-e2e.sh --junit-report results.xml  # Write JUnit XML report
+
+# Service provider tests
+./tests/run-e2e.sh --k8s-container-service-provider --cluster-api https://api.example.com:6443
+./tests/run-e2e.sh --skip-deploy --label-filter "sp && container"
 ```
 
 ## Cursor Integration

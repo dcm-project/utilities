@@ -87,18 +87,22 @@ The `tests/` directory contains the Ginkgo/Gomega E2E test framework.
 
 ```
 tests/
-  run-e2e.sh              # Test harness: deploy → resolve CLI → test → teardown
+  run-e2e.sh                    # Test harness: deploy → resolve CLI → test → teardown
+  compose-sp-test.yaml          # Compose override: publishes SP ports for testing
   e2e/
-    go.mod                 # Standalone Go module
-    suite_test.go          # Ginkgo bootstrap
-    api_helpers_test.go    # HTTP helpers, env config, BeforeSuite connectivity check
-    cli_helpers_test.go    # CLI binary execution helper (runDCM)
-    api_health_test.go     # Health endpoint smoke tests (Label: "smoke")
-    api_providers_test.go  # Provider CRUD lifecycle tests (API)
-    api_policies_test.go   # Policy CRUD lifecycle tests (API)
-    cli_version_test.go    # CLI version command test (Label: "smoke", "cli")
-    cli_providers_test.go  # CLI sp provider read tests (Label: "cli")
-    cli_policy_test.go     # CLI policy CRUD tests (Label: "cli")
+    go.mod                       # Standalone Go module
+    suite_test.go                # Ginkgo bootstrap
+    api_helpers_test.go          # HTTP helpers, env config, BeforeSuite connectivity check
+    cli_helpers_test.go          # CLI binary execution helper (runDCM)
+    sp_helpers_test.go           # Container SP direct-API + NATS helpers
+    api_health_test.go           # Health endpoint smoke tests (Label: "smoke")
+    api_providers_test.go        # Provider CRUD lifecycle tests (API)
+    api_policies_test.go         # Policy CRUD lifecycle tests (API)
+    sp_container_api_test.go     # Container SP CRUD tests (Label: "sp", "container")
+    sp_container_status_test.go  # Container SP NATS status events (Label: "sp", "container", "nats")
+    cli_version_test.go          # CLI version command test (Label: "smoke", "cli")
+    cli_providers_test.go        # CLI sp provider read tests (Label: "cli")
+    cli_policy_test.go           # CLI policy CRUD tests (Label: "cli")
 ```
 
 ### Running Tests
@@ -107,11 +111,12 @@ tests/
 make test-e2e          # Run all E2E tests (stack must be running)
 make test-smoke        # Run smoke tests only (health checks + CLI version)
 make test-cli          # Run CLI tests only
+make test-sp           # Run service provider tests (SP must be deployed)
 make test-e2e-full     # Full lifecycle: deploy → test → teardown
 make download-cli      # Download latest DCM CLI from GitHub releases
 ```
 
-The test harness (`tests/run-e2e.sh`) supports `--skip-deploy`, `--skip-teardown`, `--skip-cli`, `--dcm-cli-path`, `--label-filter`, `--gateway-url`, and `--junit-report` flags.
+The test harness (`tests/run-e2e.sh`) supports `--skip-deploy`, `--skip-teardown`, `--skip-cli`, `--dcm-cli-path`, `--label-filter`, `--gateway-url`, `--junit-report`, and service provider flags (`--k8s-container-service-provider`, `--all-service-providers`, `--kubeconfig`, `--cluster-api`, `--cluster-password`, etc.).
 
 All test targets support JUnit XML output: `make test-e2e JUNIT_REPORT=results.xml`
 
@@ -120,6 +125,7 @@ All test targets support JUnit XML output: `make test-e2e JUNIT_REPORT=results.x
 | Layer | What it tests | Label |
 |-------|--------------|-------|
 | **API tests** | HTTP CRUD operations against the gateway | (none) |
+| **SP tests** | Container SP direct API + NATS status events | `sp`, `container` |
 | **CLI tests** | DCM CLI binary against the live stack | `cli` |
 | **Smoke tests** | Health checks + CLI version (quick validation) | `smoke` |
 
@@ -139,8 +145,11 @@ CLI tests are skipped (not failed) if no binary is available.
 - API tests use raw `net/http` (no generated clients) for independence from service repos
 - CLI tests use `os/exec` to run the actual binary (not in-process Cobra)
 - `DCM_GATEWAY_URL` env var overrides the gateway endpoint (default: `http://localhost:9080/api/v1alpha1`)
+- `DCM_CONTAINER_SP_URL` env var overrides the container SP endpoint (default: `http://localhost:8082/api/v1alpha1`)
+- `DCM_NATS_URL` env var overrides the NATS server (default: `nats://localhost:4222`)
 - `DCM_CLI_PATH` env var specifies the CLI binary path
-- Ginkgo labels (`smoke`, `cli`) enable selective test runs via `--label-filter`
+- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `nats`) enable selective test runs via `--label-filter`
+- SP tests skip gracefully if the container SP isn't reachable (no hard failure)
 
 ## `dcm-versions.json`
 

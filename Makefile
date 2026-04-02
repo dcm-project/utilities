@@ -1,4 +1,4 @@
-.PHONY: help e2e-up test-e2e test-smoke test-cli e2e-down test-e2e-full download-cli cli-version lint
+.PHONY: help e2e-up test-e2e test-smoke test-cli test-sp e2e-down test-e2e-full download-cli cli-version lint
 
 # Set JUNIT_REPORT to a filename to produce JUnit XML output.
 # Example: make test-e2e JUNIT_REPORT=results.xml
@@ -22,6 +22,9 @@ test-smoke: ## Run smoke tests only (health checks + CLI version)
 
 test-cli: ## Run CLI tests only (stack must be running)
 	cd tests/e2e && $(GINKGO_BASE) --label-filter=cli .
+
+test-sp: ## Run service provider tests (SP must be deployed with port published)
+	cd tests/e2e && $(GINKGO_BASE) --label-filter=sp .
 
 e2e-down: ## Tear down the DCM stack
 	./scripts/deploy-dcm.sh --tear-down

@@ -52,6 +52,7 @@ Options:
   --cluster-api URL              OpenShift API URL for oc login
   --cluster-username USER        Username for oc login (default: kubeadmin)
   --cluster-password PASS        Password for oc login
+  --compose-file PATH            Additional compose file to merge (repeatable, e.g. port overrides)
   --cleanup-on-failure           Tear down the stack automatically if deployment fails (default: leave for debugging)
   --running-versions             Print versions of all running containers and write dcm-versions.json
   --tear-down                    Stop the stack, remove volumes, and clean the deploy directory
@@ -443,6 +444,7 @@ DCM_CONTAINER_NAMESPACE="${K8S_CONTAINER_SP_NAMESPACE:-default}"
 OPENSHIFT_API="${OPENSHIFT_API:-}"
 OPENSHIFT_USERNAME="${OPENSHIFT_USERNAME:-kubeadmin}"
 OPENSHIFT_PASSWORD="${OPENSHIFT_PASSWORD:-}"
+COMPOSE_EXTRA_FILE_ARGS=()
 
 require_arg() {
     if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
@@ -486,6 +488,10 @@ while [[ $# -gt 0 ]]; do
         --cluster-password)
             require_arg "$1" "${2:-}"
             OPENSHIFT_PASSWORD="${2:-}"; shift 2 ;;
+        --compose-file)
+            require_arg "$1" "${2:-}"
+            COMPOSE_EXTRA_FILE_ARGS+=("-f" "$(cd "$(dirname "${2:-}")" && pwd)/$(basename "${2:-}")")
+            shift 2 ;;
         --cleanup-on-failure)
             CLEANUP_ON_FAILURE=true; shift ;;
         --running-versions)
@@ -515,12 +521,12 @@ fi
 
 if [[ "${RUNNING_VERSIONS}" == true ]]; then
     check_required_tools podman podman-compose curl jq || exit 1
-    get_running_versions "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || exit 1
+    get_running_versions "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || exit 1
     exit 0
 fi
 
 if [[ "${TEAR_DOWN}" == true ]]; then
-    tear_down "${API_GATEWAY_TMP_DIR}" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}
+    tear_down "${API_GATEWAY_TMP_DIR}" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}
     exit 0
 fi
 
@@ -572,7 +578,7 @@ log "Preparing deploy directory: ${API_GATEWAY_TMP_DIR}"
 
 if [[ -d "${API_GATEWAY_TMP_DIR}" ]]; then
     info "Cleaning existing deploy directory..."
-    podman-compose -f "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} down -v 2>/dev/null || true
+    podman-compose -f "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} down -v 2>/dev/null || true
     rm -rf "${API_GATEWAY_TMP_DIR}"
 fi
 
@@ -582,7 +588,7 @@ git clone --branch "${API_GATEWAY_BRANCH}" --single-branch --depth 1 "${API_GATE
 # --- Deploy ---------------------------------------------------------------- #
 
 if [[ "${CLEANUP_ON_FAILURE}" == true ]]; then
-    trap 'err "Deploy failed — cleaning up"; tear_down "${API_GATEWAY_TMP_DIR}" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}' ERR
+    trap 'err "Deploy failed — cleaning up"; tear_down "${API_GATEWAY_TMP_DIR}" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}' ERR
 fi
 
 log "Starting DCM stack"
@@ -592,15 +598,15 @@ ENABLED_PROVIDERS=()
 if [[ ${#ENABLED_PROVIDERS[@]} -gt 0 ]]; then
     info "Enabled providers: ${ENABLED_PROVIDERS[*]}"
 fi
-podman-compose -f "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} up -d
+podman-compose -f "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} up -d
 
 echo
 log "Container status"
-podman-compose -f "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} ps
+podman-compose -f "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} ps
 
-verify_health "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || exit 1
+verify_health "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || exit 1
 
-get_running_versions "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || info "Version collection failed (non-fatal)"
+get_running_versions "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || info "Version collection failed (non-fatal)"
 
 GATEWAY_URL="http://localhost:${GATEWAY_PORT}"
 log "DCM stack is up and healthy at ${GATEWAY_URL}"

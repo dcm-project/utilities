@@ -1,0 +1,42 @@
+---
+description: E2E test structure and conventions for the Ginkgo test suite
+globs: ["tests/e2e/**/*_test.go", "tests/**/*.yaml", "tests/run-e2e.sh"]
+alwaysApply: false
+---
+
+# E2E Test Conventions
+
+## File Naming
+
+Files follow `{layer}_{subject}_test.go` with a matching `{layer}_helpers_test.go`:
+
+| Prefix | Interface | Helpers |
+|--------|-----------|---------|
+| `api_` | Gateway HTTP API (`doRequest` → `localhost:9080`) | `api_helpers_test.go` |
+| `cli_` | CLI binary (`runDCM` → `os/exec`) | `cli_helpers_test.go` |
+| `sp_`  | Service provider direct API + NATS (`doContainerSPRequest` → `localhost:8082`) | `sp_helpers_test.go` |
+
+When adding a new service provider, add `sp_{provider}_{concern}_test.go` (e.g. `sp_kubevirt_api_test.go`). Shared SP helpers go in `sp_helpers_test.go`.
+
+## Go Conventions
+- All files start with `//go:build e2e` and `package e2e_test`
+- Dot-import Ginkgo and Gomega: `. "github.com/onsi/ginkgo/v2"`
+- Use Ginkgo labels for selective runs: `Label("sp", "container")`, `Label("cli")`, `Label("smoke")`
+- Ordered contexts need `AfterAll` cleanup; standalone tests use `BeforeEach`/`AfterEach`
+- Tests that need optional infrastructure (CLI binary, SP endpoint) call `requireCLI()` or `requireContainerSP()` to skip gracefully
+- `BeforeSuite` in `api_helpers_test.go` is the single initialization point — add `init*()` calls there for new subsystems
+
+## Graceful Skipping
+- Never fail when optional infrastructure is missing — always `Skip()`
+- For `Ordered` contexts, put the guard in `BeforeAll` (not individual `It` blocks) so the entire sequence skips
+
+## Environment Variables
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DCM_GATEWAY_URL` | `http://localhost:9080/api/v1alpha1` | Gateway API |
+| `DCM_CONTAINER_SP_URL` | `http://localhost:8082/api/v1alpha1` | Container SP direct API |
+| `DCM_NATS_URL` | `nats://localhost:4222` | NATS for status events |
+| `DCM_CLI_PATH` | (auto-resolved) | CLI binary path |
+
+## Compose Overrides
+SP tests require `tests/compose-sp-test.yaml` to publish internal ports. The test harness (`run-e2e.sh`) injects this automatically when SP flags are passed. For manual runs: `--compose-file tests/compose-sp-test.yaml`.

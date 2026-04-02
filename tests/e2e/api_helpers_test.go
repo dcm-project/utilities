@@ -48,6 +48,9 @@ var _ = BeforeSuite(func() {
 
 	// Resolve CLI binary (tests skip gracefully if not found).
 	initCLI()
+
+	// Probe container SP (tests skip gracefully if not deployed).
+	initContainerSP()
 })
 
 // doRequest builds a full URL from a relative path, sends the request, and
