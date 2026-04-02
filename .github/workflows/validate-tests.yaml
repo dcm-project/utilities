@@ -1,0 +1,31 @@
+name: Validate E2E Tests
+
+on:
+  push:
+    branches: [main]
+    paths: ['tests/**']
+  pull_request:
+    branches: [main]
+    paths: ['tests/**']
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/e2e
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: tests/e2e/go.mod
+
+      - name: Verify dependencies are tidy
+        run: go mod tidy && git diff --exit-code -- go.mod go.sum
+
+      - name: Vet
+        run: go vet --tags=e2e ./...
+
+      - name: Compile check
+        run: go test --tags=e2e -c -o /dev/null .

@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-DCM Utilities — a shared repository for common scripts and tooling used across the [dcm-project](https://github.com/dcm-project) ecosystem. Currently houses the E2E deploy script; will also contain the E2E test suite.
+DCM Utilities — a shared repository for common scripts and tooling used across the [dcm-project](https://github.com/dcm-project) ecosystem. Houses the E2E deploy script and the E2E test suite.
 
-This repo contains **bash scripts, not Go code**. There is no build step or compiled output. It also contains E2E test plans and results under `test-plans/`.
+This repo contains **bash scripts and a Go-based E2E test suite**. The shell scripts have no build step; the Go tests in `tests/e2e/` are compiled on-demand by Ginkgo. It also contains E2E test plans and results under `test-plans/`.
 
 ## Cursor Integration
 
@@ -19,7 +19,7 @@ When making changes in a PR, always check whether `CLAUDE.md`, `README.md`, and 
 ## Linting
 
 ```bash
-shellcheck scripts/*.sh
+shellcheck scripts/*.sh tests/*.sh
 ```
 
 CI runs ShellCheck on changed `*.sh` files via `.github/workflows/lint.yaml` (only on PRs/pushes to `main`, only on changed files). Always validate locally before pushing.
@@ -78,6 +78,69 @@ Test plans include:
 - Scope and tier breakdowns (what's testable at each infrastructure level)
 - Cross-references to upstream repo test plans (`.ai/test-plans/`) to avoid duplicating unit/integration coverage
 - Code-verified behavior notes from actual PR implementations
+
+## E2E Test Suite
+
+The `tests/` directory contains the Ginkgo/Gomega E2E test framework.
+
+### Structure
+
+```
+tests/
+  run-e2e.sh              # Test harness: deploy → resolve CLI → test → teardown
+  e2e/
+    go.mod                 # Standalone Go module
+    suite_test.go          # Ginkgo bootstrap
+    api_helpers_test.go    # HTTP helpers, env config, BeforeSuite connectivity check
+    cli_helpers_test.go    # CLI binary execution helper (runDCM)
+    api_health_test.go     # Health endpoint smoke tests (Label: "smoke")
+    api_providers_test.go  # Provider CRUD lifecycle tests (API)
+    api_policies_test.go   # Policy CRUD lifecycle tests (API)
+    cli_version_test.go    # CLI version command test (Label: "smoke", "cli")
+    cli_providers_test.go  # CLI sp provider read tests (Label: "cli")
+    cli_policy_test.go     # CLI policy CRUD tests (Label: "cli")
+```
+
+### Running Tests
+
+```bash
+make test-e2e          # Run all E2E tests (stack must be running)
+make test-smoke        # Run smoke tests only (health checks + CLI version)
+make test-cli          # Run CLI tests only
+make test-e2e-full     # Full lifecycle: deploy → test → teardown
+make download-cli      # Download latest DCM CLI from GitHub releases
+```
+
+The test harness (`tests/run-e2e.sh`) supports `--skip-deploy`, `--skip-teardown`, `--skip-cli`, `--dcm-cli-path`, `--label-filter`, `--gateway-url`, and `--junit-report` flags.
+
+All test targets support JUnit XML output: `make test-e2e JUNIT_REPORT=results.xml`
+
+### Test Layers
+
+| Layer | What it tests | Label |
+|-------|--------------|-------|
+| **API tests** | HTTP CRUD operations against the gateway | (none) |
+| **CLI tests** | DCM CLI binary against the live stack | `cli` |
+| **Smoke tests** | Health checks + CLI version (quick validation) | `smoke` |
+
+### CLI Binary Resolution
+
+CLI tests require the `dcm` binary. Resolution order:
+1. `DCM_CLI_PATH` env var or `--dcm-cli-path` flag
+2. `dcm` in `$PATH`
+3. Previously downloaded binary in `bin/dcm` (from `make download-cli`)
+4. Auto-download from GitHub releases (`dcm-project/cli`, requires `gh`)
+
+CLI tests are skipped (not failed) if no binary is available.
+
+### Conventions
+
+- All test files use `//go:build e2e` build tag
+- API tests use raw `net/http` (no generated clients) for independence from service repos
+- CLI tests use `os/exec` to run the actual binary (not in-process Cobra)
+- `DCM_GATEWAY_URL` env var overrides the gateway endpoint (default: `http://localhost:9080/api/v1alpha1`)
+- `DCM_CLI_PATH` env var specifies the CLI binary path
+- Ginkgo labels (`smoke`, `cli`) enable selective test runs via `--label-filter`
 
 ## `dcm-versions.json`
 
