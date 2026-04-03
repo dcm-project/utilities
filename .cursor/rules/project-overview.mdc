@@ -7,18 +7,18 @@ alwaysApply: true
 # Project Overview
 
 DCM Utilities — shared scripts and tooling for the [dcm-project](https://github.com/dcm-project) ecosystem.
-Currently houses the E2E deploy script; will also contain the E2E test suite.
+Houses the E2E deploy script, Ginkgo/Gomega E2E test suite, and test plans.
 
 **For non-Cursor environments:** See `CLAUDE.md` at project root for consolidated context.
 
 ## Key Directories
 - `scripts/` - Shell scripts (deploy, teardown, health checks)
+- `tests/e2e/` - Ginkgo/Gomega E2E test suite (Go, compiled on-demand)
+- `tests/run-e2e.sh` - Test harness: deploy → resolve CLI → test → teardown
+- `test-plans/` - E2E test plans and results by Jira ticket
 - `.github/workflows/` - CI configuration (ShellCheck linting)
 - `.cursor/rules/` - AI context rules (auto-loaded by Cursor)
 - `.cursor/prompts/` - Task-specific guides (use with `@` in Cursor)
-
-## Important
-This repo contains **bash scripts, not Go code**. There is no build step or compiled output.
 
 ## Available Prompts
 Use `@<prompt-name>` in Cursor to include task-specific context:

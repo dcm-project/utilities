@@ -21,12 +21,30 @@ brew install podman podman-compose curl jq
 sudo dnf install podman podman-compose curl jq
 ```
 
-### "Cannot connect to cluster" (KubeVirt mode)
+### "No cluster credentials found"
+The script could not resolve cluster auth. Try one of:
+```bash
+# Option 1: Pass kubeconfig explicitly
+./scripts/deploy-dcm.sh --kubevirt-service-provider --kubeconfig ~/.kube/config
+
+# Option 2: Log in first, then deploy (session auto-detected)
+oc login https://api.cluster.example.com --username=kubeadmin --password=...
+./scripts/deploy-dcm.sh --kubevirt-service-provider
+
+# Option 3: Pass credentials inline
+./scripts/deploy-dcm.sh --kubevirt-service-provider \
+    --cluster-api https://api.cluster.example.com --cluster-password secret
+```
+
+### "Cannot connect to cluster" (provider validation)
 ```bash
 # Verify kubeconfig
 oc --kubeconfig ~/.kube/config cluster-info
 
-# Check CNV is installed
+# Or with kubectl
+kubectl --kubeconfig ~/.kube/config cluster-info
+
+# Check CNV is installed (kubevirt only)
 oc get crd virtualmachines.kubevirt.io
 ```
 

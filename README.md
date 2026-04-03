@@ -10,6 +10,7 @@ Common scripts and tooling shared across the [DCM](https://github.com/dcm-projec
 | `dcm-versions.json` | Example output of container version resolution (gitignored) |
 | `tests/run-e2e.sh` | Test harness: deploy, run tests, teardown |
 | `tests/e2e/` | Ginkgo/Gomega E2E test suite |
+| `test-plans/` | E2E test plans and results for DCM service providers |
 | `Makefile` | Convenience targets (`make help` to list all) |
 
 ### `dcm-versions.json`
@@ -41,21 +42,26 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 ### Prerequisites
 
 - `git`, `podman`, `podman-compose`, `curl`, `jq`
-- `oc` (only when enabling the KubeVirt service provider)
+- `oc` (for KubeVirt provider; also used for `oc login` auth)
+- `oc` or `kubectl` (for k8s container provider — either works)
 
 ### Quick Start
 
 ```bash
-# 1. Deploy the full DCM stack
+# 1. Deploy the full DCM stack (no providers)
 ./scripts/deploy-dcm.sh
 
-# 2. Deploy with the KubeVirt service provider
+# 2. Deploy with the k8s container service provider (auto-detects cluster)
+./scripts/deploy-dcm.sh --k8s-container-service-provider
+
+# 3. Deploy with KubeVirt + explicit kubeconfig
 ./scripts/deploy-dcm.sh --kubevirt-service-provider --kubeconfig ~/.kube/config
 
-# 3. Deploy with automatic cleanup on failure
-./scripts/deploy-dcm.sh --cleanup-on-failure
+# 4. Deploy all providers, logging in via oc
+./scripts/deploy-dcm.sh --all-service-providers \
+    --cluster-api https://api.cluster.example.com --cluster-password secret
 
-# 4. Tear down when done
+# 5. Tear down when done
 ./scripts/deploy-dcm.sh --tear-down
 ```
 
@@ -81,6 +87,7 @@ make e2e-up        # Deploy the stack
 make test-e2e      # Run all tests (stack must be running)
 make test-smoke    # Run health checks + CLI version only
 make test-cli      # Run CLI tests only
+make test-sp       # Run service provider tests (SP must be deployed)
 make e2e-down      # Tear down
 make download-cli  # Download latest DCM CLI without running tests
 
@@ -100,6 +107,8 @@ make help
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DCM_GATEWAY_URL` | `http://localhost:9080/api/v1alpha1` | API gateway base URL |
+| `DCM_CONTAINER_SP_URL` | `http://localhost:8082/api/v1alpha1` | Container SP direct URL (requires published port) |
+| `DCM_NATS_URL` | `nats://localhost:4222` | NATS server URL for status event tests |
 | `DCM_CLI_PATH` | (auto-resolved) | Path to `dcm` CLI binary |
 | `JUNIT_REPORT` | (none) | JUnit XML report filename (e.g. `make test-e2e JUNIT_REPORT=results.xml`) |
 
@@ -115,6 +124,10 @@ The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained
 ./tests/run-e2e.sh --label-filter smoke        # Run only smoke tests
 ./tests/run-e2e.sh --gateway-url http://...    # Override gateway URL
 ./tests/run-e2e.sh --junit-report results.xml  # Write JUnit XML report
+
+# Service provider tests
+./tests/run-e2e.sh --k8s-container-service-provider --cluster-api https://api.example.com:6443
+./tests/run-e2e.sh --skip-deploy --label-filter "sp && container"
 ```
 
 ## Cursor Integration

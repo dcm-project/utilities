@@ -14,6 +14,8 @@ import (
 
 var _ = Describe("CLI: policy commands", Label("cli"), func() {
 	Context("CRUD lifecycle", Ordered, func() {
+		BeforeAll(func() { requireCLI() })
+
 		var policyID string
 		policyDisplayName := fmt.Sprintf("E2E Test Policy %d", time.Now().UnixNano())
 
