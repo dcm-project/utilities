@@ -561,6 +561,7 @@ fi
 if [[ "${ENABLE_KUBEVIRT}" == true ]]; then
     validate_kubevirt_provider "${DCM_KUBECONFIG}" "${DCM_VM_NAMESPACE}" || exit 1
 
+    # Export as KUBEVIRT_* for compose.yaml substitution
     export KUBEVIRT_KUBECONFIG="${DCM_KUBECONFIG}"
     export KUBEVIRT_NAMESPACE="${DCM_VM_NAMESPACE}"
 fi
