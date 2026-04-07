@@ -7,6 +7,7 @@ Common scripts and tooling shared across the [DCM](https://github.com/dcm-projec
 | Path | Description |
 |------|-------------|
 | `scripts/deploy-dcm.sh` | Deploy, health-check, and tear down the full DCM stack via podman-compose |
+| `providers/` | Service provider registry — one `.conf` file per provider |
 | `dcm-versions.json` | Example output of container version resolution (gitignored) |
 | `tests/run-e2e.sh` | Test harness: deploy, run tests, teardown |
 | `tests/e2e/` | Ginkgo/Gomega E2E test suite |
@@ -42,8 +43,9 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 ### Prerequisites
 
 - `git`, `podman`, `podman-compose`, `curl`, `jq`
-- `oc` (for KubeVirt provider; also used for `oc login` auth)
+- `oc` (for KubeVirt/ACM providers; also used for `oc login` auth)
 - `oc` or `kubectl` (for k8s container provider — either works)
+- `oc` + `jq` (for `--deploy-acm` / `--deploy-mce`)
 
 ### Quick Start
 
@@ -61,7 +63,10 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 ./scripts/deploy-dcm.sh --all-service-providers \
     --cluster-api https://api.cluster.example.com --cluster-password secret
 
-# 5. Tear down when done
+# 5. Deploy ACM cluster provider (install ACM first if needed)
+./scripts/deploy-dcm.sh --acm-cluster-service-provider --deploy-acm --kubeconfig ~/.kube/config
+
+# 6. Tear down when done
 ./scripts/deploy-dcm.sh --tear-down
 ```
 
@@ -150,7 +155,7 @@ Available prompts: `@deploy-dcm`, `@tear-down`, `@check-versions`, `@troubleshoo
 Shell scripts are linted with [ShellCheck](https://www.shellcheck.net/). CI runs ShellCheck automatically on PRs against changed `*.sh` files.
 
 ```bash
-shellcheck scripts/*.sh
+shellcheck scripts/*.sh tests/*.sh
 ```
 
 ## License

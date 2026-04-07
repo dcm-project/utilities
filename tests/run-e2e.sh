@@ -40,11 +40,16 @@ Deploy passthrough flags (forwarded to deploy-dcm.sh):
   --cleanup-on-failure         Tear down on deployment failure
 
 Service provider flags (forwarded to deploy-dcm.sh):
+  --all-service-providers           Enable all SPs
   --k8s-container-service-provider  Enable the k8s container SP
   --kubevirt-service-provider       Enable the kubevirt SP
-  --all-service-providers           Enable all SPs
+  --acm-cluster-service-provider    Enable the ACM cluster SP
+  --deploy-acm                      Deploy ACM on the cluster (opt-in, heavy)
+  --deploy-mce                      Deploy MCE on the cluster (opt-in, heavy)
   --kubeconfig PATH                 Path to kubeconfig file
   --k8s-container-namespace NS      Namespace for container workloads
+  --acm-cluster-namespace NS        Namespace for ACM clusters
+  --kubevirt-vm-namespace NS        Namespace for kubevirt VMs
   --cluster-api URL                 OpenShift API URL for oc login
   --cluster-username USER           Username for oc login
   --cluster-password PASS           Password for oc login
@@ -199,10 +204,13 @@ while [[ $# -gt 0 ]]; do
                 SP_COMPOSE_INJECTED=true
             fi
             shift ;;
-        --kubevirt-service-provider)
+        --kubevirt-service-provider|--acm-cluster-service-provider)
             DEPLOY_ARGS+=("$1")
             shift ;;
-        --compose-file|--kubeconfig|--k8s-container-namespace|--cluster-api|--cluster-username|--cluster-password)
+        --deploy-acm|--deploy-mce)
+            DEPLOY_ARGS+=("$1")
+            shift ;;
+        --compose-file|--kubeconfig|--k8s-container-namespace|--acm-cluster-namespace|--kubevirt-vm-namespace|--cluster-api|--cluster-username|--cluster-password|--acm-cluster-sp-repo|--acm-cluster-sp-branch)
             DEPLOY_ARGS+=("$1" "$2")
             shift 2 ;;
         --help)

@@ -4,6 +4,10 @@ set -euo pipefail
 # DCM E2E Deploy Script
 # Clones the api-gateway repo, brings up the full DCM stack via podman-compose,
 # and verifies all services are healthy.
+#
+# Service providers are configured via providers/*.conf files. To add a new
+# provider, drop a .conf file in the providers/ directory — no changes to
+# this script are required.
 
 readonly DEFAULT_API_GATEWAY_REPO="https://github.com/dcm-project/api-gateway.git"
 readonly DEFAULT_API_GATEWAY_BRANCH="main"
@@ -19,16 +23,76 @@ readonly HEALTH_ENDPOINTS=(
     "/api/v1alpha1/health/placement"
 )
 
-# Supported providers and their compose profile names
-readonly PROVIDER_KUBEVIRT="kubevirt"
-readonly PROVIDER_K8S_CONTAINER="k8s-container"
+readonly DEFAULT_ACM_CLUSTER_SP_REPO="https://github.com/dcm-project/acm-cluster-service-provider.git"
+readonly DEFAULT_ACM_CLUSTER_SP_BRANCH="main"
 
-# Compose variable contract — these names are defined in api-gateway's compose.yaml.
-# If the compose file renames them, these exports must be updated to match.
-#   KUBEVIRT_KUBECONFIG          → volume mount for kubevirt SP container
-#   KUBEVIRT_NAMESPACE           → KUBERNETES_NAMESPACE inside kubevirt SP
-#   K8S_CONTAINER_SP_KUBECONFIG  → volume mount for k8s container SP
-#   K8S_CONTAINER_SP_NAMESPACE   → SP_K8S_NAMESPACE inside k8s container SP
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# --- Provider registry ----------------------------------------------------- #
+#
+# Each providers/*.conf file defines a service provider. The registry loads
+# them into parallel arrays indexed by provider number. All per-provider logic
+# (arg parsing, validation, compose args, env exports) uses these arrays.
+
+PROV_COUNT=0
+PROV_LABELS=()
+PROV_FLAGS=()
+PROV_DESCRIPTIONS=()
+PROV_PROFILES=()
+PROV_OVERRIDES=()
+PROV_CLI_REQS=()
+PROV_NS_FLAGS=()
+PROV_NS_ENVS=()
+PROV_NS_DEFAULTS=()
+PROV_KC_EXPORTS=()
+PROV_NS_EXPORTS=()
+PROV_VALIDATES=()
+# Mutable state per provider (set during arg parsing / processing)
+PROV_ENABLED=()
+PROV_NAMESPACES=()
+PROV_CLIS=()
+
+load_providers() {
+    local conf
+    for conf in "${REPO_ROOT}/providers/"*.conf; do
+        [[ -f "${conf}" ]] || continue
+
+        # Source into a clean set of variables
+        local PROVIDER_LABEL="" PROVIDER_FLAG="" PROVIDER_DESCRIPTION=""
+        local COMPOSE_PROFILE="" COMPOSE_OVERRIDE="" CLI_REQUIREMENT=""
+        local NAMESPACE_FLAG="" NAMESPACE_ENV="" NAMESPACE_DEFAULT=""
+        local KUBECONFIG_EXPORT="" NAMESPACE_EXPORT="" VALIDATE_HOOK=""
+
+        # shellcheck source=/dev/null
+        source "${conf}"
+
+        local i="${PROV_COUNT}"
+        PROV_LABELS[i]="${PROVIDER_LABEL}"
+        PROV_FLAGS[i]="${PROVIDER_FLAG}"
+        PROV_DESCRIPTIONS[i]="${PROVIDER_DESCRIPTION}"
+        PROV_PROFILES[i]="${COMPOSE_PROFILE}"
+        PROV_OVERRIDES[i]="${COMPOSE_OVERRIDE}"
+        PROV_CLI_REQS[i]="${CLI_REQUIREMENT}"
+        PROV_NS_FLAGS[i]="${NAMESPACE_FLAG}"
+        PROV_NS_ENVS[i]="${NAMESPACE_ENV}"
+        PROV_NS_DEFAULTS[i]="${NAMESPACE_DEFAULT}"
+        PROV_KC_EXPORTS[i]="${KUBECONFIG_EXPORT}"
+        PROV_NS_EXPORTS[i]="${NAMESPACE_EXPORT}"
+        PROV_VALIDATES[i]="${VALIDATE_HOOK}"
+
+        # Initialize mutable state
+        PROV_ENABLED[i]=false
+        # Resolve default namespace from env var or default value
+        local ns_env_val=""
+        eval "ns_env_val=\"\${${NAMESPACE_ENV}:-}\""
+        PROV_NAMESPACES[i]="${ns_env_val:-${NAMESPACE_DEFAULT}}"
+        PROV_CLIS[i]=""
+
+        PROV_COUNT=$((PROV_COUNT + 1))
+    done
+}
+
+load_providers
 
 # --- Usage ----------------------------------------------------------------- #
 
@@ -44,11 +108,29 @@ Options:
   --api-gateway-branch REF       Branch to clone (default: ${DEFAULT_API_GATEWAY_BRANCH})
   --api-gateway-dir PATH         Directory to clone api-gateway into (default: ${DEFAULT_API_GATEWAY_TMP_DIR})
   --all-service-providers        Enable all available service providers
-  --kubevirt-service-provider    Enable the kubevirt service provider
-  --k8s-container-service-provider  Enable the k8s container service provider
+EOF
+
+    # Provider flags (generated from registry)
+    local i
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        printf "  --%-30s %s\n" "${PROV_FLAGS[$i]}" "${PROV_DESCRIPTIONS[$i]}"
+    done
+
+    cat <<EOF
+  --deploy-acm                   Deploy ACM on the cluster before starting the stack (opt-in, heavy)
+  --deploy-mce                   Deploy MCE on the cluster before starting the stack (opt-in, heavy)
+  --acm-cluster-sp-repo URL      Git repo for acm-cluster-service-provider (default: ${DEFAULT_ACM_CLUSTER_SP_REPO})
+  --acm-cluster-sp-branch REF    Branch to clone (default: ${DEFAULT_ACM_CLUSTER_SP_BRANCH})
   --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted)
-  --kubevirt-vm-namespace NS     Kubevirt namespace for VMs (default: vms)
-  --k8s-container-namespace NS   Namespace for container workloads (default: default)
+EOF
+
+    # Namespace flags (generated from registry)
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        printf "  --%-30s Namespace for %s (default: %s)\n" \
+            "${PROV_NS_FLAGS[$i]} NS" "${PROV_LABELS[$i]}" "${PROV_NS_DEFAULTS[$i]}"
+    done
+
+    cat <<EOF
   --cluster-api URL              OpenShift API URL for oc login
   --cluster-username USER        Username for oc login (default: kubeadmin)
   --cluster-password PASS        Password for oc login
@@ -69,11 +151,22 @@ Environment variables (flags take precedence):
   API_GATEWAY_BRANCH        Same as --api-gateway-branch
   API_GATEWAY_TMP_DIR       Same as --api-gateway-dir
   KUBECONFIG                Same as --kubeconfig
-  KUBEVIRT_VM_NAMESPACE     Same as --kubevirt-vm-namespace (default: vms)
-  K8S_CONTAINER_SP_NAMESPACE  Same as --k8s-container-namespace (default: default)
   OPENSHIFT_API             Same as --cluster-api
   OPENSHIFT_USERNAME        Same as --cluster-username (default: kubeadmin)
   OPENSHIFT_PASSWORD        Same as --cluster-password
+EOF
+
+    # Provider namespace env vars (generated from registry)
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        printf "  %-25s Same as --%s (default: %s)\n" \
+            "${PROV_NS_ENVS[$i]}" "${PROV_NS_FLAGS[$i]}" "${PROV_NS_DEFAULTS[$i]}"
+    done
+
+    cat <<EOF
+  ACM_CHANNEL               Override ACM subscription channel (auto-detect)
+  MCE_CHANNEL               Override MCE subscription channel (auto-detect)
+  CSV_TIMEOUT               Seconds to wait for operator CSV (default: 300)
+  DEPLOY_TIMEOUT            Seconds to wait for ACM/MCE CR readiness (default: 1200)
 
 Examples:
   $(basename "$0")
@@ -81,6 +174,7 @@ Examples:
   $(basename "$0") --kubevirt-service-provider --kubeconfig ~/.kube/config
   $(basename "$0") --k8s-container-service-provider
   $(basename "$0") --all-service-providers --cluster-api https://api.cluster.example.com --cluster-password secret
+  $(basename "$0") --acm-cluster-service-provider --deploy-acm --kubeconfig ~/.kube/config
   $(basename "$0") --tear-down
   $(basename "$0") --running-versions
 EOF
@@ -94,7 +188,6 @@ err()  { echo "ERROR: $*" >&2; }
 
 # --- Prerequisite helpers -------------------------------------------------- #
 
-# Guard against catastrophic rm -rf on system paths
 validate_deploy_dir() {
     local dir="$1"
 
@@ -125,6 +218,28 @@ check_required_tools() {
     fi
 }
 
+ensure_podman_running() {
+    if podman info &>/dev/null; then
+        return 0
+    fi
+
+    # On macOS, Podman runs inside a VM that must be started explicitly
+    if podman machine list --format '{{.Name}}' &>/dev/null; then
+        info "Podman machine is not running — starting it..."
+        if podman machine start 2>&1; then
+            info "Podman machine started"
+            return 0
+        fi
+        err "Failed to start Podman machine"
+        err "Try manually: podman machine start"
+        return 1
+    fi
+
+    err "Podman daemon is not reachable and no Podman machine found"
+    err "Install or start Podman before running this script"
+    return 1
+}
+
 # --- Tear-down ------------------------------------------------------------- #
 
 tear_down() {
@@ -136,11 +251,8 @@ tear_down() {
 
     if [[ -d "${deploy_dir}" ]]; then
         info "Stopping containers and removing volumes..."
-        # Use all profiles so every service (including optional ones) is stopped
         podman-compose -f "${deploy_dir}/compose.yaml" ${compose_profiles[@]+"${compose_profiles[@]}"} down -v 2>/dev/null || true
 
-        # podman-compose down can leave orphans when containers have dependency
-        # chains (e.g. healthcheck depends_on). Force-remove any stragglers.
         local project_name
         project_name=$(basename "${deploy_dir}")
         local remaining
@@ -150,7 +262,6 @@ tear_down() {
             echo "${remaining}" | xargs -r podman rm -f 2>/dev/null || true
         fi
 
-        # Clean up pod and network that compose may have created
         podman pod ls --filter "name=${project_name}" --format '{{.ID}}' 2>/dev/null | xargs -r podman pod rm -f 2>/dev/null || true
         podman network rm -f "${project_name}_default" 2>/dev/null || true
 
@@ -161,31 +272,16 @@ tear_down() {
     log "Tear-down complete"
 }
 
-# --- Provider validation -------------------------------------------------- #
+# --- Provider validation hooks -------------------------------------------- #
+#
+# Each hook receives: (kubeconfig, namespace, cli_binary)
+# Hooks use what they need and ignore the rest.
 
 validate_kubevirt_provider() {
     local kubeconfig="$1"
-    local vm_namespace="$2"
+    local namespace="$2"
 
     log "Validating kubevirt provider prerequisites"
-
-    if [[ -z "${kubeconfig}" ]]; then
-        err "KUBECONFIG or --kubeconfig is required when kubevirt provider is enabled"
-        return 1
-    fi
-
-    if [[ ! -f "${kubeconfig}" ]]; then
-        err "Kubeconfig file not found: ${kubeconfig}"
-        return 1
-    fi
-
-    info "Verifying cluster connectivity..."
-    if ! oc --kubeconfig="${kubeconfig}" cluster-info &>/dev/null; then
-        err "Cannot connect to cluster using kubeconfig: ${kubeconfig}"
-        err "Verify the kubeconfig is valid and the cluster is reachable"
-        return 1
-    fi
-    info "Cluster is reachable"
 
     info "Checking for OpenShift Virtualization (kubevirt.io CRDs)..."
     if ! oc --kubeconfig="${kubeconfig}" get crd virtualmachines.kubevirt.io &>/dev/null; then
@@ -194,12 +290,12 @@ validate_kubevirt_provider() {
     fi
     info "OpenShift Virtualization is installed"
 
-    info "Ensuring namespace '${vm_namespace}' exists..."
-    if ! oc --kubeconfig="${kubeconfig}" get namespace "${vm_namespace}" &>/dev/null; then
-        info "Creating namespace '${vm_namespace}'..."
-        oc --kubeconfig="${kubeconfig}" create namespace "${vm_namespace}"
+    info "Ensuring namespace '${namespace}' exists..."
+    if ! oc --kubeconfig="${kubeconfig}" get namespace "${namespace}" &>/dev/null; then
+        info "Creating namespace '${namespace}'..."
+        oc --kubeconfig="${kubeconfig}" create namespace "${namespace}"
     fi
-    info "Namespace '${vm_namespace}' is ready"
+    info "Namespace '${namespace}' is ready"
 }
 
 validate_k8s_container_provider() {
@@ -209,24 +305,6 @@ validate_k8s_container_provider() {
 
     log "Validating k8s container provider prerequisites"
 
-    if [[ -z "${kubeconfig}" ]]; then
-        err "Kubeconfig is required when k8s container provider is enabled"
-        return 1
-    fi
-
-    if [[ ! -f "${kubeconfig}" ]]; then
-        err "Kubeconfig file not found: ${kubeconfig}"
-        return 1
-    fi
-
-    info "Verifying cluster connectivity (using ${cli})..."
-    if ! "${cli}" --kubeconfig="${kubeconfig}" cluster-info &>/dev/null; then
-        err "Cannot connect to cluster using kubeconfig: ${kubeconfig}"
-        err "Verify the kubeconfig is valid and the cluster is reachable"
-        return 1
-    fi
-    info "Cluster is reachable"
-
     info "Ensuring namespace '${namespace}' exists..."
     if ! "${cli}" --kubeconfig="${kubeconfig}" get namespace "${namespace}" &>/dev/null; then
         info "Creating namespace '${namespace}'..."
@@ -235,10 +313,14 @@ validate_k8s_container_provider() {
     info "Namespace '${namespace}' is ready"
 }
 
+validate_acm_cluster_provider() {
+    log "Validating ACM cluster provider prerequisites"
+    info "Cluster connectivity verified during kubeconfig resolution"
+}
+
 # --- Cluster authentication ------------------------------------------------ #
 
 resolve_kubeconfig() {
-    # 1. Explicit kubeconfig path (--kubeconfig or KUBECONFIG env)
     if [[ -n "${DCM_KUBECONFIG}" ]]; then
         if [[ ! -f "${DCM_KUBECONFIG}" ]]; then
             err "Kubeconfig file not found: ${DCM_KUBECONFIG}"
@@ -248,7 +330,6 @@ resolve_kubeconfig() {
         return 0
     fi
 
-    # 2. Existing session — prefer oc, fall back to kubectl
     if command -v oc &>/dev/null && oc whoami &>/dev/null; then
         DCM_KUBECONFIG="${HOME}/.kube/config"
         info "Using existing oc session ($(oc whoami))"
@@ -259,7 +340,6 @@ resolve_kubeconfig() {
         return 0
     fi
 
-    # 3. oc login with provided credentials
     if [[ -n "${OPENSHIFT_API:-}" ]] && [[ -n "${OPENSHIFT_PASSWORD:-}" ]]; then
         if ! command -v oc &>/dev/null; then
             err "'oc' is required for --cluster-api login"
@@ -288,12 +368,9 @@ verify_health() {
 
     log "Verifying service health"
 
-    # Confirm all compose services have running containers
     info "Checking container readiness..."
     local expected_services running_services
     expected_services=$(podman-compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} config --services 2>/dev/null | sort)
-    # podman-compose ps doesn't support --format {{.Service}}, so extract service
-    # names from the NAMES column (format: <project>_<service>_<instance>)
     running_services=$(podman-compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} ps 2>/dev/null | awk 'NR>1 {print $NF}' | sed 's/.*_\(.*\)_[0-9]*/\1/' | sort)
 
     local container_failures=()
@@ -311,7 +388,6 @@ verify_health() {
     fi
     info "All containers running"
 
-    # Poll gateway health endpoints
     info "Polling health endpoints (timeout: ${HEALTH_TIMEOUT_SECONDS}s)..."
 
     local gateway_url="http://localhost:${GATEWAY_PORT}"
@@ -350,8 +426,6 @@ verify_health() {
 
 # --- Running versions ------------------------------------------------------ #
 
-# Queries the Quay.io API to find the git commit SHA that produced an image.
-# Matches the image's manifest digest against tags named "sha-<commit>".
 resolve_git_sha() {
     local repo_name="$1"
     local image_digest="$2"
@@ -428,6 +502,56 @@ get_running_versions() {
     info "Versions written to ${output_file}"
 }
 
+# --- Provider helpers ------------------------------------------------------ #
+
+# Resolve the CLI binary for a provider based on its CLI_REQUIREMENT.
+# Sets PROV_CLIS[$1] and adds to REQUIRED_TOOLS if needed.
+resolve_provider_cli() {
+    local i="$1"
+    local req="${PROV_CLI_REQS[$i]}"
+
+    case "${req}" in
+        oc)
+            PROV_CLIS[i]="oc"
+            REQUIRED_TOOLS+=(oc)
+            ;;
+        oc-or-kubectl)
+            if command -v oc &>/dev/null; then
+                PROV_CLIS[i]="oc"
+            elif command -v kubectl &>/dev/null; then
+                PROV_CLIS[i]="kubectl"
+            else
+                REQUIRED_TOOLS+=(oc)
+                PROV_CLIS[i]="oc"
+            fi
+            ;;
+        *)
+            PROV_CLIS[i]=""
+            ;;
+    esac
+}
+
+# Collect compose args (profiles and overrides) for an enabled provider.
+collect_provider_compose() {
+    local i="$1"
+
+    if [[ -n "${PROV_PROFILES[$i]}" ]]; then
+        COMPOSE_PROFILES+=("--profile" "${PROV_PROFILES[$i]}")
+    fi
+
+    if [[ -n "${PROV_OVERRIDES[$i]}" ]]; then
+        local override_path="${REPO_ROOT}/${PROV_OVERRIDES[$i]}"
+        if [[ -f "${override_path}" ]]; then
+            override_path="$(cd "$(dirname "${override_path}")" && pwd)/$(basename "${override_path}")"
+            COMPOSE_EXTRA_FILE_ARGS+=("-f" "${override_path}")
+            info "Injecting compose override for ${PROV_LABELS[$i]}: ${override_path}"
+        else
+            err "Compose override not found for ${PROV_LABELS[$i]}: ${override_path}"
+            exit 1
+        fi
+    fi
+}
+
 # --- Argument parsing ------------------------------------------------------ #
 
 API_GATEWAY_REPO="${API_GATEWAY_REPO:-${DEFAULT_API_GATEWAY_REPO}}"
@@ -436,11 +560,10 @@ API_GATEWAY_TMP_DIR="${API_GATEWAY_TMP_DIR:-${DEFAULT_API_GATEWAY_TMP_DIR}}"
 TEAR_DOWN=false
 RUNNING_VERSIONS=false
 CLEANUP_ON_FAILURE=false
-ENABLE_KUBEVIRT=false
-ENABLE_K8S_CONTAINER=false
+DEPLOY_ACM_MCE=""
+ACM_CLUSTER_SP_REPO="${DEFAULT_ACM_CLUSTER_SP_REPO}"
+ACM_CLUSTER_SP_BRANCH="${DEFAULT_ACM_CLUSTER_SP_BRANCH}"
 DCM_KUBECONFIG="${KUBECONFIG:-}"
-DCM_VM_NAMESPACE="${KUBEVIRT_VM_NAMESPACE:-vms}"
-DCM_CONTAINER_NAMESPACE="${K8S_CONTAINER_SP_NAMESPACE:-default}"
 OPENSHIFT_API="${OPENSHIFT_API:-}"
 OPENSHIFT_USERNAME="${OPENSHIFT_USERNAME:-kubeadmin}"
 OPENSHIFT_PASSWORD="${OPENSHIFT_PASSWORD:-}"
@@ -452,6 +575,29 @@ require_arg() {
         usage; exit 1
     fi
 }
+
+# Match a flag against loaded provider flags/namespace flags.
+# Returns 0 and sets MATCHED_IDX if found, returns 1 otherwise.
+match_provider_flag() {
+    local flag="$1"
+    local i
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        if [[ "${flag}" == "--${PROV_FLAGS[$i]}" ]]; then
+            MATCHED_IDX="${i}"
+            MATCHED_TYPE="enable"
+            return 0
+        fi
+        if [[ "${flag}" == "--${PROV_NS_FLAGS[$i]}" ]]; then
+            MATCHED_IDX="${i}"
+            MATCHED_TYPE="namespace"
+            return 0
+        fi
+    done
+    return 1
+}
+
+MATCHED_IDX=""
+MATCHED_TYPE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -465,20 +611,25 @@ while [[ $# -gt 0 ]]; do
             require_arg "$1" "${2:-}"
             API_GATEWAY_TMP_DIR="${2:-}"; shift 2 ;;
         --all-service-providers)
-            ENABLE_KUBEVIRT=true; ENABLE_K8S_CONTAINER=true; shift ;;
-        --kubevirt-service-provider)
-            ENABLE_KUBEVIRT=true; shift ;;
-        --k8s-container-service-provider)
-            ENABLE_K8S_CONTAINER=true; shift ;;
+            for i in $(seq 0 $((PROV_COUNT - 1))); do
+                PROV_ENABLED[i]=true
+            done
+            shift ;;
+        --deploy-acm)
+            [[ -n "${DEPLOY_ACM_MCE}" ]] && { err "--deploy-acm and --deploy-mce are mutually exclusive"; exit 1; }
+            DEPLOY_ACM_MCE="acm"; shift ;;
+        --deploy-mce)
+            [[ -n "${DEPLOY_ACM_MCE}" ]] && { err "--deploy-acm and --deploy-mce are mutually exclusive"; exit 1; }
+            DEPLOY_ACM_MCE="mce"; shift ;;
+        --acm-cluster-sp-repo)
+            require_arg "$1" "${2:-}"
+            ACM_CLUSTER_SP_REPO="${2:-}"; shift 2 ;;
+        --acm-cluster-sp-branch)
+            require_arg "$1" "${2:-}"
+            ACM_CLUSTER_SP_BRANCH="${2:-}"; shift 2 ;;
         --kubeconfig)
             require_arg "$1" "${2:-}"
             DCM_KUBECONFIG="${2:-}"; shift 2 ;;
-        --kubevirt-vm-namespace)
-            require_arg "$1" "${2:-}"
-            DCM_VM_NAMESPACE="${2:-}"; shift 2 ;;
-        --k8s-container-namespace)
-            require_arg "$1" "${2:-}"
-            DCM_CONTAINER_NAMESPACE="${2:-}"; shift 2 ;;
         --cluster-api)
             require_arg "$1" "${2:-}"
             OPENSHIFT_API="${2:-}"; shift 2 ;;
@@ -501,31 +652,54 @@ while [[ $# -gt 0 ]]; do
         --help)
             usage; exit 0 ;;
         *)
-            err "Unknown option: $1"
-            usage; exit 1 ;;
+            if match_provider_flag "$1"; then
+                case "${MATCHED_TYPE}" in
+                    enable)
+                        PROV_ENABLED[MATCHED_IDX]=true
+                        shift ;;
+                    namespace)
+                        require_arg "$1" "${2:-}"
+                        PROV_NAMESPACES[MATCHED_IDX]="${2:-}"
+                        shift 2 ;;
+                esac
+            else
+                err "Unknown option: $1"
+                usage; exit 1
+            fi
+            ;;
     esac
 done
 
 validate_deploy_dir "${API_GATEWAY_TMP_DIR}" || exit 1
 
-# Build compose profile args based on enabled providers
+# --- Build compose args from enabled providers ----------------------------- #
+
 COMPOSE_PROFILES=()
-if [[ "${ENABLE_KUBEVIRT}" == true ]]; then
-    COMPOSE_PROFILES+=("--profile" "${PROVIDER_KUBEVIRT}")
-fi
-if [[ "${ENABLE_K8S_CONTAINER}" == true ]]; then
-    COMPOSE_PROFILES+=("--profile" "${PROVIDER_K8S_CONTAINER}")
-fi
+
+any_provider_enabled() {
+    local i
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        [[ "${PROV_ENABLED[$i]}" == true ]] && return 0
+    done
+    return 1
+}
+
+for i in $(seq 0 $((PROV_COUNT - 1))); do
+    [[ "${PROV_ENABLED[$i]}" == true ]] || continue
+    collect_provider_compose "${i}"
+done
 
 # --- Running versions (standalone) ----------------------------------------- #
 
 if [[ "${RUNNING_VERSIONS}" == true ]]; then
     check_required_tools podman podman-compose curl jq || exit 1
+    ensure_podman_running || exit 1
     get_running_versions "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || exit 1
     exit 0
 fi
 
 if [[ "${TEAR_DOWN}" == true ]]; then
+    ensure_podman_running || exit 1
     tear_down "${API_GATEWAY_TMP_DIR}" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}
     exit 0
 fi
@@ -535,42 +709,72 @@ fi
 log "Checking prerequisites"
 
 REQUIRED_TOOLS=(git podman podman-compose curl jq)
-if [[ "${ENABLE_KUBEVIRT}" == true ]]; then
-    REQUIRED_TOOLS+=(oc)
-fi
 
-K8S_CLI=""
-if [[ "${ENABLE_K8S_CONTAINER}" == true ]]; then
-    if command -v oc &>/dev/null; then
-        K8S_CLI="oc"
-    elif command -v kubectl &>/dev/null; then
-        K8S_CLI="kubectl"
-    else
-        REQUIRED_TOOLS+=(oc)
-    fi
-fi
+for i in $(seq 0 $((PROV_COUNT - 1))); do
+    [[ "${PROV_ENABLED[$i]}" == true ]] || continue
+    resolve_provider_cli "${i}"
+done
 
 check_required_tools "${REQUIRED_TOOLS[@]}" || exit 1
 info "All prerequisites found: ${REQUIRED_TOOLS[*]}"
 
-# Resolve cluster credentials when any provider is enabled
-if [[ "${ENABLE_KUBEVIRT}" == true ]] || [[ "${ENABLE_K8S_CONTAINER}" == true ]]; then
+ensure_podman_running || exit 1
+
+# Resolve cluster credentials when any provider or ACM/MCE deploy is enabled
+if any_provider_enabled || [[ -n "${DEPLOY_ACM_MCE}" ]]; then
     resolve_kubeconfig || exit 1
 fi
 
-if [[ "${ENABLE_KUBEVIRT}" == true ]]; then
-    validate_kubevirt_provider "${DCM_KUBECONFIG}" "${DCM_VM_NAMESPACE}" || exit 1
+# Validate and export env vars for each enabled provider
+for i in $(seq 0 $((PROV_COUNT - 1))); do
+    [[ "${PROV_ENABLED[$i]}" == true ]] || continue
 
-    # Export as KUBEVIRT_* for compose.yaml substitution
-    export KUBEVIRT_KUBECONFIG="${DCM_KUBECONFIG}"
-    export KUBEVIRT_NAMESPACE="${DCM_VM_NAMESPACE}"
-fi
+    local_ns="${PROV_NAMESPACES[$i]}"
+    local_cli="${PROV_CLIS[$i]}"
+    local_hook="${PROV_VALIDATES[$i]}"
 
-if [[ "${ENABLE_K8S_CONTAINER}" == true ]]; then
-    validate_k8s_container_provider "${DCM_KUBECONFIG}" "${DCM_CONTAINER_NAMESPACE}" "${K8S_CLI}" || exit 1
+    # Cluster connectivity check (common to all providers)
+    if [[ -n "${local_cli}" ]] && [[ -n "${DCM_KUBECONFIG}" ]]; then
+        info "Verifying cluster connectivity for ${PROV_LABELS[$i]} (using ${local_cli})..."
+        if ! "${local_cli}" --kubeconfig="${DCM_KUBECONFIG}" cluster-info &>/dev/null; then
+            err "Cannot connect to cluster using kubeconfig: ${DCM_KUBECONFIG}"
+            exit 1
+        fi
+        info "Cluster is reachable"
+    fi
 
-    export K8S_CONTAINER_SP_KUBECONFIG="${DCM_KUBECONFIG}"
-    export K8S_CONTAINER_SP_NAMESPACE="${DCM_CONTAINER_NAMESPACE}"
+    # Provider-specific validation
+    if [[ -n "${local_hook}" ]] && type -t "${local_hook}" &>/dev/null; then
+        "${local_hook}" "${DCM_KUBECONFIG}" "${local_ns}" "${local_cli}" || exit 1
+    fi
+
+    # Export compose substitution vars
+    if [[ -n "${PROV_KC_EXPORTS[$i]}" ]]; then
+        export "${PROV_KC_EXPORTS[$i]}=${DCM_KUBECONFIG}"
+    fi
+    if [[ -n "${PROV_NS_EXPORTS[$i]}" ]]; then
+        export "${PROV_NS_EXPORTS[$i]}=${local_ns}"
+    fi
+done
+
+# --- ACM / MCE deployment -------------------------------------------------- #
+
+if [[ -n "${DEPLOY_ACM_MCE}" ]]; then
+    ACM_SP_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/dcm-acm-sp.XXXXXX")
+    trap 'rm -rf "${ACM_SP_TMP_DIR}"' EXIT
+
+    log "Cloning acm-cluster-service-provider (branch=${ACM_CLUSTER_SP_BRANCH})"
+    git clone --branch "${ACM_CLUSTER_SP_BRANCH}" --single-branch --depth 1 \
+        "${ACM_CLUSTER_SP_REPO}" "${ACM_SP_TMP_DIR}/repo"
+
+    ACM_MCE_DEPLOY_SCRIPT="${ACM_SP_TMP_DIR}/repo/hack/deploy-acm-mce.sh"
+    if [[ ! -f "${ACM_MCE_DEPLOY_SCRIPT}" ]]; then
+        err "deploy-acm-mce.sh not found in cloned repo at ${ACM_MCE_DEPLOY_SCRIPT}"
+        exit 1
+    fi
+
+    log "Deploying $(echo "${DEPLOY_ACM_MCE}" | tr '[:lower:]' '[:upper:]') on the cluster (this may take 10-20 minutes)"
+    KUBECONFIG="${DCM_KUBECONFIG}" bash "${ACM_MCE_DEPLOY_SCRIPT}" "--${DEPLOY_ACM_MCE}" || exit 1
 fi
 
 # --- Clone ----------------------------------------------------------------- #
@@ -593,11 +797,12 @@ if [[ "${CLEANUP_ON_FAILURE}" == true ]]; then
 fi
 
 log "Starting DCM stack"
-ENABLED_PROVIDERS=()
-[[ "${ENABLE_KUBEVIRT}" == true ]] && ENABLED_PROVIDERS+=("kubevirt")
-[[ "${ENABLE_K8S_CONTAINER}" == true ]] && ENABLED_PROVIDERS+=("k8s-container")
-if [[ ${#ENABLED_PROVIDERS[@]} -gt 0 ]]; then
-    info "Enabled providers: ${ENABLED_PROVIDERS[*]}"
+ENABLED_LABELS=()
+for i in $(seq 0 $((PROV_COUNT - 1))); do
+    [[ "${PROV_ENABLED[$i]}" == true ]] && ENABLED_LABELS+=("${PROV_LABELS[$i]}")
+done
+if [[ ${#ENABLED_LABELS[@]} -gt 0 ]]; then
+    info "Enabled providers: ${ENABLED_LABELS[*]}"
 fi
 podman-compose -f "${API_GATEWAY_TMP_DIR}/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} up -d
 

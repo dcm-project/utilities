@@ -35,14 +35,32 @@ Deploys the full DCM stack for E2E testing by cloning api-gateway (which owns `c
 - `--running-versions`: query already-running containers, resolve git SHAs via Quay.io API, write `dcm-versions.json`
 - `--tear-down`: stop containers, remove volumes, delete deploy directory
 
-**Service provider profiles:** Optional compose profiles add extra services:
-- `--kubevirt-service-provider` — requires OCP cluster with CNV installed
-- `--k8s-container-service-provider` — works with any Kubernetes cluster
-- `--all-service-providers` — enables all providers
+**Service providers:** Configured via `providers/*.conf` files (see "Provider Registry" below). Enable with `--<label>-service-provider` or `--all-service-providers`.
+
+**ACM/MCE deployment:** Pass `--deploy-acm` or `--deploy-mce` to install Red Hat ACM or MCE on the OCP cluster before starting the DCM stack. This clones the [acm-cluster-service-provider](https://github.com/dcm-project/acm-cluster-service-provider) repo and runs its `hack/deploy-acm-mce.sh` script. Can take 10–20 minutes. Requires `oc` and `jq`. These are opt-in flags, not enabled by default.
 
 **Cluster authentication:** When any provider is enabled, the script resolves cluster access in priority order: explicit `--kubeconfig`, existing `oc`/`kubectl` session, or `oc login` via `--cluster-api` + `--cluster-password`.
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
+
+### Provider Registry
+
+Service providers are defined declaratively in `providers/*.conf` files. Each conf file specifies:
+
+| Key | Purpose |
+|-----|---------|
+| `PROVIDER_LABEL` | Short name for display and flag generation |
+| `PROVIDER_FLAG` | CLI flag name (e.g. `kubevirt-service-provider`) |
+| `COMPOSE_PROFILE` | Compose profile name from api-gateway (if applicable) |
+| `COMPOSE_OVERRIDE` | Compose override file relative to repo root (if applicable) |
+| `CLI_REQUIREMENT` | CLI tool needed: `oc`, `oc-or-kubectl`, or empty |
+| `NAMESPACE_FLAG` / `NAMESPACE_ENV` / `NAMESPACE_DEFAULT` | Namespace configuration |
+| `KUBECONFIG_EXPORT` / `NAMESPACE_EXPORT` | Env var names for compose substitution |
+| `VALIDATE_HOOK` | Function name for provider-specific validation |
+
+**To add a new provider:** drop a `.conf` file in `providers/` and (if needed) add a validation hook function in `deploy-dcm.sh`. No other changes to the deploy script are required — flags, usage, arg parsing, and env exports are all generated from the registry.
+
+Current providers: `kubevirt`, `k8s-container`, `acm-cluster`.
 
 ### Script Structure
 
@@ -50,17 +68,21 @@ The script is organized into sections separated by comment banners. Key function
 
 | Function | Purpose |
 |----------|---------|
+| `load_providers` | Scans `providers/*.conf` and populates parallel arrays |
 | `validate_deploy_dir` | Guards against `rm -rf` on system paths |
 | `check_required_tools` | Verifies `git`, `podman`, `curl`, `jq`, etc. are installed |
 | `tear_down` | Stops containers, removes volumes, deletes deploy dir |
 | `resolve_kubeconfig` | Resolves cluster credentials (kubeconfig file, existing session, or `oc login`) |
-| `validate_kubevirt_provider` | Checks cluster connectivity and CNV CRDs via `oc` |
-| `validate_k8s_container_provider` | Checks cluster connectivity via `oc` or `kubectl` |
+| `validate_kubevirt_provider` | Checks CNV CRDs and creates namespace via `oc` |
+| `validate_k8s_container_provider` | Creates namespace via `oc` or `kubectl` |
+| `validate_acm_cluster_provider` | Validates ACM cluster SP prerequisites |
+| `resolve_provider_cli` | Resolves `oc`/`kubectl` per provider's `CLI_REQUIREMENT` |
+| `collect_provider_compose` | Collects compose profiles/overrides for an enabled provider |
 | `verify_health` | Confirms all compose services are running, then polls health endpoints with timeout |
 | `resolve_git_sha` | Queries Quay.io tag API to map image digest → git commit SHA |
 | `get_running_versions` | Iterates running containers, calls `resolve_git_sha`, writes JSON |
 
-Argument parsing happens inline (not in a function) via a `while/case` loop after the function definitions.
+Argument parsing happens inline (not in a function) via a `while/case` loop. Provider flags are matched dynamically via `match_provider_flag` against the loaded registry.
 
 ## Shell Conventions
 
