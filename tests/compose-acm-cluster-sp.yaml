@@ -1,12 +1,13 @@
 # Compose override: adds the ACM cluster service provider to the DCM stack.
 # The api-gateway compose.yaml does not yet include this service, so this
-# override defines it from the upstream Containerfile image on Quay.
+# override defines it from the upstream image on Quay.
 #
-# Usage with deploy-dcm.sh:
-#   ./scripts/deploy-dcm.sh --acm-cluster-service-provider --compose-file tests/compose-acm-cluster-sp.yaml
+# Injected automatically by deploy-dcm.sh via the provider registry
+# (providers/acm-cluster.conf → COMPOSE_OVERRIDE).
 #
 # Required env vars (exported by deploy-dcm.sh when --acm-cluster-service-provider is set):
-#   ACM_CLUSTER_SP_KUBECONFIG  — path to kubeconfig with access to the ACM Hub cluster
+#   ACM_CLUSTER_SP_KUBECONFIG    — path to kubeconfig with access to the ACM Hub cluster
+#   ACM_CLUSTER_SP_PULL_SECRET   — base64-encoded .dockerconfigjson for pulling OCP release images
 
 services:
   acm-cluster-service-provider:
@@ -19,6 +20,8 @@ services:
       SP_NATS_URL: "nats://nats:4222"
       SP_CLUSTER_NAMESPACE: ${ACM_CLUSTER_SP_NAMESPACE:-clusters}
       SP_ENABLED_PLATFORMS: ${ACM_CLUSTER_SP_PLATFORMS:-kubevirt,baremetal}
+      SP_PULL_SECRET: ${ACM_CLUSTER_SP_PULL_SECRET:-}
+      KUBECONFIG: /kubeconfig
     expose:
       - "8080"
     ports:

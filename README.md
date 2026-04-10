@@ -83,7 +83,7 @@ The test suite uses [Ginkgo](https://onsi.github.io/ginkgo/) and [Gomega](https:
 make test-e2e-full
 ```
 
-This runs the full lifecycle via `tests/run-e2e.sh`: deploys the DCM stack with `podman-compose`, auto-downloads the CLI binary from GitHub releases, executes all E2E tests (health checks, API CRUD, CLI commands), and tears down afterward.
+This runs the full lifecycle via `tests/run-e2e.sh`: deploys the DCM stack with `podman-compose`, auto-downloads the CLI binary from GitHub releases, executes all E2E tests (health checks, API CRUD, SP tests, CLI commands), and tears down afterward.
 
 ### Step-by-Step
 
@@ -92,7 +92,8 @@ make e2e-up        # Deploy the stack
 make test-e2e      # Run all tests (stack must be running)
 make test-smoke    # Run health checks + CLI version only
 make test-cli      # Run CLI tests only
-make test-sp       # Run service provider tests (SP must be deployed)
+make test-sp       # Run container SP tests (SP must be deployed)
+make test-acm-sp   # Run ACM cluster SP tests (ACM SP must be deployed)
 make e2e-down      # Tear down
 make download-cli  # Download latest DCM CLI without running tests
 
@@ -113,6 +114,7 @@ make help
 |----------|---------|-------------|
 | `DCM_GATEWAY_URL` | `http://localhost:9080/api/v1alpha1` | API gateway base URL |
 | `DCM_CONTAINER_SP_URL` | `http://localhost:8082/api/v1alpha1` | Container SP direct URL (requires published port) |
+| `DCM_ACM_CLUSTER_SP_URL` | `http://localhost:8083/api/v1alpha1` | ACM Cluster SP direct URL (requires published port) |
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS server URL for status event tests |
 | `DCM_CLI_PATH` | (auto-resolved) | Path to `dcm` CLI binary |
 | `JUNIT_REPORT` | (none) | JUnit XML report filename (e.g. `make test-e2e JUNIT_REPORT=results.xml`) |
@@ -133,6 +135,10 @@ The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained
 # Service provider tests
 ./tests/run-e2e.sh --k8s-container-service-provider --cluster-api https://api.example.com:6443
 ./tests/run-e2e.sh --skip-deploy --label-filter "sp && container"
+
+# ACM cluster SP tests
+./tests/run-e2e.sh --acm-cluster-service-provider --kubeconfig ~/.kube/config
+./tests/run-e2e.sh --skip-deploy --label-filter "sp && acm-cluster"
 ```
 
 ## Cursor Integration

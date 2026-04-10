@@ -14,16 +14,17 @@ Files follow `{layer}_{subject}_test.go` with a matching `{layer}_helpers_test.g
 |--------|-----------|---------|
 | `api_` | Gateway HTTP API (`doRequest` → `localhost:9080`) | `api_helpers_test.go` |
 | `cli_` | CLI binary (`runDCM` → `os/exec`) | `cli_helpers_test.go` |
-| `sp_`  | Service provider direct API + NATS (`doContainerSPRequest` → `localhost:8082`) | `sp_helpers_test.go` |
+| `sp_container_` | Container SP direct API + NATS (`doContainerSPRequest` → `localhost:8082`) | `sp_helpers_test.go` |
+| `sp_acm_cluster_` | ACM Cluster SP direct API (`doAcmClusterSPRequest` → `localhost:8083`) | `sp_acm_cluster_helpers_test.go` |
 
-When adding a new service provider, add `sp_{provider}_{concern}_test.go` (e.g. `sp_kubevirt_api_test.go`). Shared SP helpers go in `sp_helpers_test.go`.
+When adding a new service provider, add `sp_{provider}_{concern}_test.go` (e.g. `sp_kubevirt_api_test.go`). Each provider gets its own helpers file (`sp_{provider}_helpers_test.go`). Shared infrastructure (kubectl, podman, NATS collector) stays in `sp_helpers_test.go`.
 
 ## Go Conventions
 - All files start with `//go:build e2e` and `package e2e_test`
 - Dot-import Ginkgo and Gomega: `. "github.com/onsi/ginkgo/v2"`
-- Use Ginkgo labels for selective runs: `Label("sp", "container")`, `Label("cli")`, `Label("smoke")`, `Label("cluster")`, `Label("disruptive")`
+- Use Ginkgo labels for selective runs: `Label("sp", "container")`, `Label("sp", "acm-cluster")`, `Label("cli")`, `Label("smoke")`, `Label("cluster")`, `Label("disruptive")`
 - Ordered contexts need `AfterAll` cleanup; standalone tests use `BeforeEach`/`AfterEach`
-- Tests that need optional infrastructure call `requireCLI()`, `requireContainerSP()`, `requireKubectl()`, or `requirePodman()` to skip gracefully
+- Tests that need optional infrastructure call `requireCLI()`, `requireContainerSP()`, `requireAcmClusterSP()`, `requireKubectl()`, or `requirePodman()` to skip gracefully
 - `BeforeSuite` in `api_helpers_test.go` is the single initialization point — add `init*()` calls there for new subsystems
 - Tests that modify infrastructure (e.g. stop NATS) use `Label("disruptive")` so they can be excluded from normal runs
 - Tests that require cluster access use `Label("cluster")` so they can be filtered when no cluster is available
@@ -37,8 +38,11 @@ When adding a new service provider, add `sp_{provider}_{concern}_test.go` (e.g. 
 |----------|---------|---------|
 | `DCM_GATEWAY_URL` | `http://localhost:9080/api/v1alpha1` | Gateway API |
 | `DCM_CONTAINER_SP_URL` | `http://localhost:8082/api/v1alpha1` | Container SP direct API |
+| `DCM_ACM_CLUSTER_SP_URL` | `http://localhost:8083/api/v1alpha1` | ACM Cluster SP direct API |
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS for status events |
 | `DCM_CLI_PATH` | (auto-resolved) | CLI binary path |
 
 ## Compose Overrides
-SP tests require `tests/compose-sp-test.yaml` to publish internal ports. The test harness (`run-e2e.sh`) injects this automatically when SP flags are passed. For manual runs: `--compose-file tests/compose-sp-test.yaml`.
+SP compose overrides are managed by the provider registry (`providers/*.conf`). Each provider's `COMPOSE_OVERRIDE` key specifies its overlay file, which `deploy-dcm.sh` injects automatically when the provider is enabled:
+- `tests/compose-sp-test.yaml` — publishes container SP port 8082 (via `k8s-container.conf`)
+- `tests/compose-acm-cluster-sp.yaml` — adds the ACM cluster SP service on port 8083 (via `acm-cluster.conf`)

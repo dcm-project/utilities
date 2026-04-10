@@ -314,8 +314,35 @@ validate_k8s_container_provider() {
 }
 
 validate_acm_cluster_provider() {
+    local kubeconfig="$1"
+    local namespace="$2"
+
     log "Validating ACM cluster provider prerequisites"
-    info "Cluster connectivity verified during kubeconfig resolution"
+
+    info "Ensuring namespace '${namespace}' exists..."
+    if ! oc --kubeconfig="${kubeconfig}" get namespace "${namespace}" &>/dev/null; then
+        info "Creating namespace '${namespace}'..."
+        oc --kubeconfig="${kubeconfig}" create namespace "${namespace}"
+    fi
+    info "Namespace '${namespace}' is ready"
+
+    # Resolve pull secret for the SP. Order:
+    #   1. ACM_CLUSTER_SP_PULL_SECRET env var (already set by user)
+    #   2. Extract from the cluster's global pull-secret
+    if [[ -z "${ACM_CLUSTER_SP_PULL_SECRET:-}" ]]; then
+        info "Resolving pull secret from cluster..."
+        local pull_json
+        pull_json=$(oc --kubeconfig="${kubeconfig}" get secret pull-secret \
+            -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' 2>/dev/null || echo "")
+        if [[ -n "${pull_json}" ]]; then
+            ACM_CLUSTER_SP_PULL_SECRET="${pull_json}"
+            info "Pull secret resolved from openshift-config/pull-secret"
+        else
+            info "WARNING: Could not extract pull secret from cluster — SP may fail to start"
+            info "Set ACM_CLUSTER_SP_PULL_SECRET env var manually if needed"
+        fi
+    fi
+    export ACM_CLUSTER_SP_PULL_SECRET="${ACM_CLUSTER_SP_PULL_SECRET:-}"
 }
 
 # --- Cluster authentication ------------------------------------------------ #
@@ -760,21 +787,95 @@ done
 # --- ACM / MCE deployment -------------------------------------------------- #
 
 if [[ -n "${DEPLOY_ACM_MCE}" ]]; then
-    ACM_SP_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/dcm-acm-sp.XXXXXX")
-    trap 'rm -rf "${ACM_SP_TMP_DIR}"' EXIT
+    DEPLOY_LABEL="$(echo "${DEPLOY_ACM_MCE}" | tr '[:lower:]' '[:upper:]')"
 
-    log "Cloning acm-cluster-service-provider (branch=${ACM_CLUSTER_SP_BRANCH})"
-    git clone --branch "${ACM_CLUSTER_SP_BRANCH}" --single-branch --depth 1 \
-        "${ACM_CLUSTER_SP_REPO}" "${ACM_SP_TMP_DIR}/repo"
-
-    ACM_MCE_DEPLOY_SCRIPT="${ACM_SP_TMP_DIR}/repo/hack/deploy-acm-mce.sh"
-    if [[ ! -f "${ACM_MCE_DEPLOY_SCRIPT}" ]]; then
-        err "deploy-acm-mce.sh not found in cloned repo at ${ACM_MCE_DEPLOY_SCRIPT}"
-        exit 1
+    if [[ "${DEPLOY_ACM_MCE}" == "acm" ]]; then
+        CR_KIND="MultiClusterHub"
+        CR_API="operator.open-cluster-management.io/v1"
+        CR_NAME="multiclusterhub"
+        CR_NAMESPACE="open-cluster-management"
+        CSV_PREFIX="advanced-cluster-management"
+    else
+        CR_KIND="MultiClusterEngine"
+        CR_API="multicluster.openshift.io/v1"
+        CR_NAME="multiclusterengine"
+        CR_NAMESPACE="multicluster-engine"
+        CSV_PREFIX="multicluster-engine"
     fi
 
-    log "Deploying $(echo "${DEPLOY_ACM_MCE}" | tr '[:lower:]' '[:upper:]') on the cluster (this may take 10-20 minutes)"
-    KUBECONFIG="${DCM_KUBECONFIG}" bash "${ACM_MCE_DEPLOY_SCRIPT}" "--${DEPLOY_ACM_MCE}" || exit 1
+    # Check if the CR already exists and is ready
+    cr_phase=$(oc --kubeconfig="${DCM_KUBECONFIG}" get "${CR_KIND}" "${CR_NAME}" \
+        -n "${CR_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+
+    if [[ "${cr_phase}" == "Running" ]]; then
+        log "${DEPLOY_LABEL} is already installed and running — skipping deployment"
+    else
+        # Check if operator CSV is already installed
+        csv_installed=false
+        while IFS= read -r line; do
+            if [[ "${line}" == *"${CSV_PREFIX}"* && "${line}" == *"Succeeded"* ]]; then
+                csv_installed=true
+                break
+            fi
+        done < <(oc --kubeconfig="${DCM_KUBECONFIG}" get csv -n "${CR_NAMESPACE}" --no-headers 2>/dev/null || true)
+
+        if [[ "${csv_installed}" == true ]] && [[ -z "${cr_phase}" ]]; then
+            # Operator is installed but CR doesn't exist yet — create it
+            log "${DEPLOY_LABEL} operator is installed but ${CR_KIND} not found — creating it"
+            oc --kubeconfig="${DCM_KUBECONFIG}" apply -f - <<CREOF
+apiVersion: ${CR_API}
+kind: ${CR_KIND}
+metadata:
+  name: ${CR_NAME}
+  namespace: ${CR_NAMESPACE}
+spec: {}
+CREOF
+        elif [[ "${csv_installed}" == true ]] && [[ -n "${cr_phase}" ]]; then
+            # CR exists but not yet Running — just wait
+            log "${DEPLOY_LABEL} ${CR_KIND} exists (phase: ${cr_phase}) — waiting for Running"
+        else
+            # Nothing installed — run the full upstream script
+            ACM_SP_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/dcm-acm-sp.XXXXXX")
+            trap 'rm -rf "${ACM_SP_TMP_DIR}"' EXIT
+
+            log "Cloning acm-cluster-service-provider (branch=${ACM_CLUSTER_SP_BRANCH})"
+            git clone --branch "${ACM_CLUSTER_SP_BRANCH}" --single-branch --depth 1 \
+                "${ACM_CLUSTER_SP_REPO}" "${ACM_SP_TMP_DIR}/repo"
+
+            ACM_MCE_DEPLOY_SCRIPT="${ACM_SP_TMP_DIR}/repo/hack/deploy-acm-mce.sh"
+            if [[ ! -f "${ACM_MCE_DEPLOY_SCRIPT}" ]]; then
+                err "deploy-acm-mce.sh not found in cloned repo at ${ACM_MCE_DEPLOY_SCRIPT}"
+                exit 1
+            fi
+
+            log "Deploying ${DEPLOY_LABEL} on the cluster (this may take 10-20 minutes)"
+            KUBECONFIG="${DCM_KUBECONFIG}" bash "${ACM_MCE_DEPLOY_SCRIPT}" "--${DEPLOY_ACM_MCE}" || exit 1
+        fi
+
+        # Wait for the CR to reach Running (common path for all non-skip cases)
+        if [[ "${cr_phase}" != "Running" ]]; then
+            cr_timeout="${DEPLOY_TIMEOUT:-1200}"
+            cr_elapsed=0
+            log "Waiting for ${CR_KIND} to reach Running (timeout: ${cr_timeout}s)"
+            while [[ ${cr_elapsed} -lt ${cr_timeout} ]]; do
+                cr_phase=$(oc --kubeconfig="${DCM_KUBECONFIG}" get "${CR_KIND}" "${CR_NAME}" \
+                    -n "${CR_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+                if [[ "${cr_phase}" == "Running" ]]; then
+                    break
+                fi
+                info "${CR_KIND} phase: ${cr_phase:-Pending} (${cr_elapsed}s elapsed)"
+                sleep 30
+                cr_elapsed=$((cr_elapsed + 30))
+            done
+
+            if [[ "${cr_phase}" == "Running" ]]; then
+                log "${DEPLOY_LABEL} is ready"
+            else
+                err "${CR_KIND} did not reach Running within ${cr_timeout}s (last phase: ${cr_phase:-unknown})"
+                exit 1
+            fi
+        fi
+    fi
 fi
 
 # --- Clone ----------------------------------------------------------------- #

@@ -1,0 +1,265 @@
+# Validates deploy-dcm.sh and run-e2e.sh flag parsing, provider registry
+# loading, and error handling without requiring any deployment infrastructure.
+
+name: Validate Scripts
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/*.sh'
+      - 'tests/run-e2e.sh'
+      - 'providers/*.conf'
+      - '.github/workflows/validate-scripts.yaml'
+  workflow_dispatch:
+
+jobs:
+  validate-deploy-script:
+    name: deploy-dcm.sh flags
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate flag parsing and provider registry
+        run: |
+          SCRIPT="scripts/deploy-dcm.sh"
+          failures=0
+          passed=0
+
+          assert_output() {
+            local output="$1" pattern="$2" label="$3"
+            if echo "$output" | grep -qF -- "$pattern"; then
+              echo "    ✓ ${label}"
+            else
+              echo "    ✗ ${label} — expected '${pattern}'"
+              return 1
+            fi
+          }
+
+          assert_exit() {
+            local actual="$1" expected="$2" label="$3"
+            if [ "$actual" -eq "$expected" ]; then
+              echo "    ✓ ${label} (exit ${actual})"
+            else
+              echo "    ✗ ${label} — expected exit ${expected}, got ${actual}"
+              return 1
+            fi
+          }
+
+          run_case() {
+            local name="$1"; shift
+            local case_failures=0
+
+            echo ""
+            echo "━━━ ${name} ━━━"
+
+            while [ $# -gt 0 ]; do
+              local check_type="$1"; shift
+              case "${check_type}" in
+                --expect-exit)
+                  local flags="$1" expected_exit="$2"; shift 2
+                  local output exit_code
+                  set +e
+                  output=$(bash "$SCRIPT" $flags 2>&1)
+                  exit_code=$?
+                  set -e
+                  assert_exit "$exit_code" "$expected_exit" "exit code for: $flags" \
+                    || case_failures=$((case_failures + 1))
+                  ;;
+                --expect-contains)
+                  local pattern="$1" label="$2"; shift 2
+                  assert_output "$output" "$pattern" "$label" \
+                    || case_failures=$((case_failures + 1))
+                  ;;
+              esac
+            done
+
+            if [ "$case_failures" -gt 0 ]; then
+              failures=$((failures + 1))
+            else
+              passed=$((passed + 1))
+            fi
+          }
+
+          # --- Help output and provider registry --------------------------------
+
+          run_case "--help exits cleanly" \
+            --expect-exit "--help" 0
+
+          # Capture help output for content checks
+          help_output=$(bash "$SCRIPT" --help 2>&1)
+          output="$help_output"
+
+          run_case "--help contains core flags" \
+            --expect-exit "--help" 0 \
+            --expect-contains "--api-gateway-repo" "api-gateway-repo flag" \
+            --expect-contains "--api-gateway-branch" "api-gateway-branch flag" \
+            --expect-contains "--kubeconfig" "kubeconfig flag" \
+            --expect-contains "--compose-file" "compose-file flag" \
+            --expect-contains "--cleanup-on-failure" "cleanup-on-failure flag" \
+            --expect-contains "--running-versions" "running-versions flag" \
+            --expect-contains "--tear-down" "tear-down flag" \
+            --expect-contains "--deploy-acm" "deploy-acm flag" \
+            --expect-contains "--deploy-mce" "deploy-mce flag"
+
+          run_case "--help contains provider registry flags" \
+            --expect-exit "--help" 0 \
+            --expect-contains "--kubevirt-service-provider" "kubevirt flag from registry" \
+            --expect-contains "--k8s-container-service-provider" "k8s-container flag from registry" \
+            --expect-contains "--acm-cluster-service-provider" "acm-cluster flag from registry" \
+            --expect-contains "--all-service-providers" "all-providers flag"
+
+          run_case "--help contains provider namespace flags" \
+            --expect-exit "--help" 0 \
+            --expect-contains "--kubevirt-vm-namespace" "kubevirt namespace flag" \
+            --expect-contains "--k8s-container-namespace" "k8s-container namespace flag" \
+            --expect-contains "--acm-cluster-namespace" "acm-cluster namespace flag"
+
+          run_case "--help contains cluster auth section" \
+            --expect-exit "--help" 0 \
+            --expect-contains "--cluster-api" "cluster-api flag" \
+            --expect-contains "--cluster-password" "cluster-password flag" \
+            --expect-contains "Cluster authentication" "auth docs section"
+
+          # --- Mutual exclusivity -----------------------------------------------
+
+          run_case "--deploy-acm + --deploy-mce are mutually exclusive" \
+            --expect-exit "--deploy-acm --deploy-mce" 1
+
+          # --- Required argument validation -------------------------------------
+
+          run_case "--kubeconfig requires a value" \
+            --expect-exit "--kubeconfig" 1
+
+          run_case "--api-gateway-repo requires a value" \
+            --expect-exit "--api-gateway-repo" 1
+
+          run_case "--compose-file requires a value" \
+            --expect-exit "--compose-file" 1
+
+          run_case "--cluster-api requires a value" \
+            --expect-exit "--cluster-api" 1
+
+          # --- Unknown flag handling --------------------------------------------
+
+          run_case "unknown flag is rejected" \
+            --expect-exit "--nonexistent-flag" 1
+
+          # --- Results ----------------------------------------------------------
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Results: ${passed} passed, ${failures} failed"
+          [ "$failures" -eq 0 ] || exit 1
+
+  validate-e2e-harness:
+    name: run-e2e.sh flags
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate flag parsing
+        run: |
+          SCRIPT="tests/run-e2e.sh"
+          failures=0
+          passed=0
+
+          assert_output() {
+            local output="$1" pattern="$2" label="$3"
+            if echo "$output" | grep -qF -- "$pattern"; then
+              echo "    ✓ ${label}"
+            else
+              echo "    ✗ ${label} — expected '${pattern}'"
+              return 1
+            fi
+          }
+
+          assert_exit() {
+            local actual="$1" expected="$2" label="$3"
+            if [ "$actual" -eq "$expected" ]; then
+              echo "    ✓ ${label} (exit ${actual})"
+            else
+              echo "    ✗ ${label} — expected exit ${expected}, got ${actual}"
+              return 1
+            fi
+          }
+
+          run_case() {
+            local name="$1"; shift
+            local case_failures=0
+
+            echo ""
+            echo "━━━ ${name} ━━━"
+
+            while [ $# -gt 0 ]; do
+              local check_type="$1"; shift
+              case "${check_type}" in
+                --expect-exit)
+                  local flags="$1" expected_exit="$2"; shift 2
+                  local output exit_code
+                  set +e
+                  output=$(bash "$SCRIPT" $flags 2>&1)
+                  exit_code=$?
+                  set -e
+                  assert_exit "$exit_code" "$expected_exit" "exit code for: $flags" \
+                    || case_failures=$((case_failures + 1))
+                  ;;
+                --expect-contains)
+                  local pattern="$1" label="$2"; shift 2
+                  assert_output "$output" "$pattern" "$label" \
+                    || case_failures=$((case_failures + 1))
+                  ;;
+              esac
+            done
+
+            if [ "$case_failures" -gt 0 ]; then
+              failures=$((failures + 1))
+            else
+              passed=$((passed + 1))
+            fi
+          }
+
+          # --- Help output ------------------------------------------------------
+
+          run_case "--help exits cleanly" \
+            --expect-exit "--help" 0
+
+          run_case "--help contains core flags" \
+            --expect-exit "--help" 0 \
+            --expect-contains "--skip-deploy" "skip-deploy flag" \
+            --expect-contains "--skip-teardown" "skip-teardown flag" \
+            --expect-contains "--skip-cli" "skip-cli flag" \
+            --expect-contains "--dcm-cli-path" "dcm-cli-path flag" \
+            --expect-contains "--gateway-url" "gateway-url flag" \
+            --expect-contains "--label-filter" "label-filter flag" \
+            --expect-contains "--junit-report" "junit-report flag"
+
+          run_case "--help contains SP passthrough flags" \
+            --expect-exit "--help" 0 \
+            --expect-contains "--k8s-container-service-provider" "k8s-container flag" \
+            --expect-contains "--acm-cluster-service-provider" "acm-cluster flag" \
+            --expect-contains "--all-service-providers" "all-providers flag" \
+            --expect-contains "--deploy-acm" "deploy-acm flag" \
+            --expect-contains "--deploy-mce" "deploy-mce flag"
+
+          run_case "--help contains env var docs" \
+            --expect-exit "--help" 0 \
+            --expect-contains "DCM_CONTAINER_SP_URL" "container SP URL env var" \
+            --expect-contains "DCM_ACM_CLUSTER_SP_URL" "ACM cluster SP URL env var" \
+            --expect-contains "DCM_NATS_URL" "NATS URL env var"
+
+          # --- Unknown flag handling --------------------------------------------
+
+          run_case "unknown flag is rejected" \
+            --expect-exit "--nonexistent-flag" 1
+
+          # --- Results ----------------------------------------------------------
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Results: ${passed} passed, ${failures} failed"
+          [ "$failures" -eq 0 ] || exit 1
