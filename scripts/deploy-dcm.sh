@@ -83,8 +83,7 @@ load_providers() {
         # Initialize mutable state
         PROV_ENABLED[i]=false
         # Resolve default namespace from env var or default value
-        local ns_env_val=""
-        eval "ns_env_val=\"\${${NAMESPACE_ENV}:-}\""
+        local ns_env_val="${!NAMESPACE_ENV:-}"
         PROV_NAMESPACES[i]="${ns_env_val:-${NAMESPACE_DEFAULT}}"
         PROV_CLIS[i]=""
 
@@ -226,11 +225,12 @@ ensure_podman_running() {
     # On macOS, Podman runs inside a VM that must be started explicitly
     if podman machine list --format '{{.Name}}' &>/dev/null; then
         info "Podman machine is not running — starting it..."
-        if podman machine start 2>&1; then
+        local output
+        if output=$(podman machine start 2>&1); then
             info "Podman machine started"
             return 0
         fi
-        err "Failed to start Podman machine"
+        err "Failed to start Podman machine: ${output}"
         err "Try manually: podman machine start"
         return 1
     fi
@@ -836,7 +836,6 @@ CREOF
         else
             # Nothing installed — run the full upstream script
             ACM_SP_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/dcm-acm-sp.XXXXXX")
-            trap 'rm -rf "${ACM_SP_TMP_DIR}"' EXIT
 
             log "Cloning acm-cluster-service-provider (branch=${ACM_CLUSTER_SP_BRANCH})"
             git clone --branch "${ACM_CLUSTER_SP_BRANCH}" --single-branch --depth 1 \
@@ -844,12 +843,16 @@ CREOF
 
             ACM_MCE_DEPLOY_SCRIPT="${ACM_SP_TMP_DIR}/repo/hack/deploy-acm-mce.sh"
             if [[ ! -f "${ACM_MCE_DEPLOY_SCRIPT}" ]]; then
+                rm -rf "${ACM_SP_TMP_DIR}"
                 err "deploy-acm-mce.sh not found in cloned repo at ${ACM_MCE_DEPLOY_SCRIPT}"
                 exit 1
             fi
 
             log "Deploying ${DEPLOY_LABEL} on the cluster (this may take 10-20 minutes)"
-            KUBECONFIG="${DCM_KUBECONFIG}" bash "${ACM_MCE_DEPLOY_SCRIPT}" "--${DEPLOY_ACM_MCE}" || exit 1
+            KUBECONFIG="${DCM_KUBECONFIG}" bash "${ACM_MCE_DEPLOY_SCRIPT}" "--${DEPLOY_ACM_MCE}"
+            deploy_rc=$?
+            rm -rf "${ACM_SP_TMP_DIR}"
+            [[ ${deploy_rc} -eq 0 ]] || exit 1
         fi
 
         # Wait for the CR to reach Running (common path for all non-skip cases)

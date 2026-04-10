@@ -2,6 +2,11 @@
 # The api-gateway compose.yaml does not yet include this service, so this
 # override defines it from the upstream image on Quay.
 #
+# Uses :latest intentionally — the SP is under active development and E2E
+# tests should run against the most recent build. pull_policy: always
+# ensures each deploy gets the newest image. Pin to a digest or tag when
+# the SP stabilizes.
+#
 # Injected automatically by deploy-dcm.sh via the provider registry
 # (providers/acm-cluster.conf → COMPOSE_OVERRIDE).
 #
