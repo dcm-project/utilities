@@ -1,0 +1,20 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Request PR Review
+        run: |
+          curl -X POST "https://slack.com/api/chat.postMessage" \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "channel": "C0APCJ60USE",
+              "text": "<@U01RFPFH681> please review ${{ github.event.pull_request.html_url }}"
+            }'
