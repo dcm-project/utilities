@@ -164,6 +164,10 @@ Shell scripts are linted with [ShellCheck](https://www.shellcheck.net/). CI runs
 shellcheck scripts/*.sh tests/*.sh
 ```
 
+### PR Review Notifications
+
+When a PR is opened or marked ready for review, a GitHub Actions workflow posts a Slack notification requesting review. Configure the `SLACK_BOT_TOKEN` repository secret to enable this.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
