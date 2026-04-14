@@ -13,6 +13,7 @@ Houses the E2E deploy script, Ginkgo/Gomega E2E test suite, and test plans.
 
 ## Key Directories
 - `scripts/` - Shell scripts (deploy, teardown, health checks)
+- `providers/` - Service provider registry (one `.conf` per provider, loaded by `deploy-dcm.sh`)
 - `tests/e2e/` - Ginkgo/Gomega E2E test suite (Go, compiled on-demand)
 - `tests/run-e2e.sh` - Test harness: deploy → resolve CLI → test → teardown
 - `test-plans/` - E2E test plans and results by Jira ticket

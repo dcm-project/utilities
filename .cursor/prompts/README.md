@@ -15,7 +15,7 @@ In Cursor, type `@` followed by the prompt name to include it in your conversati
 ## Available Prompts
 
 | Prompt | Purpose |
-|--------|---------|
+|--------|---------| 
 | `deploy-dcm.md` | Deploy the full DCM stack via podman-compose |
 | `tear-down.md` | Stop containers, remove volumes, clean up |
 | `check-versions.md` | Resolve running containers to git commit SHAs |

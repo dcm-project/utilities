@@ -1,8 +1,6 @@
-# Compose override for E2E testing: publishes service provider ports to host.
-# Applied automatically by run-e2e.sh when SP profiles are active.
-#
-# Usage with deploy-dcm.sh:
-#   ./scripts/deploy-dcm.sh --k8s-container-service-provider --compose-file tests/compose-sp-test.yaml
+# Compose override for E2E testing: publishes the container SP port to the host.
+# Injected automatically by deploy-dcm.sh via the provider registry
+# (providers/k8s-container.conf → COMPOSE_OVERRIDE).
 
 services:
   k8s-container-service-provider:

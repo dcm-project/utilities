@@ -35,14 +35,32 @@ Deploys the full DCM stack for E2E testing by cloning api-gateway (which owns `c
 - `--running-versions`: query already-running containers, resolve git SHAs via Quay.io API, write `dcm-versions.json`
 - `--tear-down`: stop containers, remove volumes, delete deploy directory
 
-**Service provider profiles:** Optional compose profiles add extra services:
-- `--kubevirt-service-provider` — requires OCP cluster with CNV installed
-- `--k8s-container-service-provider` — works with any Kubernetes cluster
-- `--all-service-providers` — enables all providers
+**Service providers:** Configured via `providers/*.conf` files (see "Provider Registry" below). Enable with `--<label>-service-provider` or `--all-service-providers`.
+
+**ACM/MCE deployment:** Pass `--deploy-acm` or `--deploy-mce` to install Red Hat ACM or MCE on the OCP cluster before starting the DCM stack. This clones the [acm-cluster-service-provider](https://github.com/dcm-project/acm-cluster-service-provider) repo and runs its `hack/deploy-acm-mce.sh` script. Can take 10–20 minutes. Requires `oc` and `jq`. These are opt-in flags, not enabled by default.
 
 **Cluster authentication:** When any provider is enabled, the script resolves cluster access in priority order: explicit `--kubeconfig`, existing `oc`/`kubectl` session, or `oc login` via `--cluster-api` + `--cluster-password`.
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
+
+### Provider Registry
+
+Service providers are defined declaratively in `providers/*.conf` files. Each conf file specifies:
+
+| Key | Purpose |
+|-----|---------|
+| `PROVIDER_LABEL` | Short name for display and flag generation |
+| `PROVIDER_FLAG` | CLI flag name (e.g. `kubevirt-service-provider`) |
+| `COMPOSE_PROFILE` | Compose profile name from api-gateway (if applicable) |
+| `COMPOSE_OVERRIDE` | Compose override file relative to repo root (if applicable) |
+| `CLI_REQUIREMENT` | CLI tool needed: `oc`, `oc-or-kubectl`, or empty |
+| `NAMESPACE_FLAG` / `NAMESPACE_ENV` / `NAMESPACE_DEFAULT` | Namespace configuration |
+| `KUBECONFIG_EXPORT` / `NAMESPACE_EXPORT` | Env var names for compose substitution |
+| `VALIDATE_HOOK` | Function name for provider-specific validation |
+
+**To add a new provider:** drop a `.conf` file in `providers/` and (if needed) add a validation hook function in `deploy-dcm.sh`. No other changes to the deploy script are required — flags, usage, arg parsing, and env exports are all generated from the registry.
+
+Current providers: `kubevirt`, `k8s-container`, `acm-cluster`.
 
 ### Script Structure
 
@@ -50,17 +68,21 @@ The script is organized into sections separated by comment banners. Key function
 
 | Function | Purpose |
 |----------|---------|
+| `load_providers` | Scans `providers/*.conf` and populates parallel arrays |
 | `validate_deploy_dir` | Guards against `rm -rf` on system paths |
 | `check_required_tools` | Verifies `git`, `podman`, `curl`, `jq`, etc. are installed |
 | `tear_down` | Stops containers, removes volumes, deletes deploy dir |
 | `resolve_kubeconfig` | Resolves cluster credentials (kubeconfig file, existing session, or `oc login`) |
-| `validate_kubevirt_provider` | Checks cluster connectivity and CNV CRDs via `oc` |
-| `validate_k8s_container_provider` | Checks cluster connectivity via `oc` or `kubectl` |
+| `validate_kubevirt_provider` | Checks CNV CRDs and creates namespace via `oc` |
+| `validate_k8s_container_provider` | Creates namespace via `oc` or `kubectl` |
+| `validate_acm_cluster_provider` | Validates ACM cluster SP prerequisites |
+| `resolve_provider_cli` | Resolves `oc`/`kubectl` per provider's `CLI_REQUIREMENT` |
+| `collect_provider_compose` | Collects compose profiles/overrides for an enabled provider |
 | `verify_health` | Confirms all compose services are running, then polls health endpoints with timeout |
 | `resolve_git_sha` | Queries Quay.io tag API to map image digest → git commit SHA |
 | `get_running_versions` | Iterates running containers, calls `resolve_git_sha`, writes JSON |
 
-Argument parsing happens inline (not in a function) via a `while/case` loop after the function definitions.
+Argument parsing happens inline (not in a function) via a `while/case` loop. Provider flags are matched dynamically via `match_provider_flag` against the loaded registry.
 
 ## Shell Conventions
 
@@ -87,22 +109,25 @@ The `tests/` directory contains the Ginkgo/Gomega E2E test framework.
 
 ```
 tests/
-  run-e2e.sh                    # Test harness: deploy → resolve CLI → test → teardown
-  compose-sp-test.yaml          # Compose override: publishes SP ports for testing
+  run-e2e.sh                         # Test harness: deploy → resolve CLI → test → teardown
+  compose-sp-test.yaml               # Compose override: publishes container SP port (auto-injected by provider registry)
+  compose-acm-cluster-sp.yaml        # Compose override: adds ACM cluster SP service (auto-injected by provider registry)
   e2e/
-    go.mod                       # Standalone Go module
-    suite_test.go                # Ginkgo bootstrap
-    api_helpers_test.go          # HTTP helpers, env config, BeforeSuite connectivity check
-    cli_helpers_test.go          # CLI binary execution helper (runDCM)
-    sp_helpers_test.go           # Container SP direct-API + NATS helpers
-    api_health_test.go           # Health endpoint smoke tests (Label: "smoke")
-    api_providers_test.go        # Provider CRUD lifecycle tests (API)
-    api_policies_test.go         # Policy CRUD lifecycle tests (API)
-    sp_container_api_test.go     # Container SP CRUD tests (Label: "sp", "container")
-    sp_container_status_test.go  # Container SP NATS status events (Label: "sp", "container", "nats")
-    cli_version_test.go          # CLI version command test (Label: "smoke", "cli")
-    cli_providers_test.go        # CLI sp provider read tests (Label: "cli")
-    cli_policy_test.go           # CLI policy CRUD tests (Label: "cli")
+    go.mod                            # Standalone Go module
+    suite_test.go                     # Ginkgo bootstrap
+    api_helpers_test.go               # HTTP helpers, env config, BeforeSuite connectivity check
+    cli_helpers_test.go               # CLI binary execution helper (runDCM)
+    sp_helpers_test.go                # Container SP direct-API + NATS + kubectl/podman helpers
+    sp_acm_cluster_helpers_test.go    # ACM Cluster SP HTTP helpers + init/require guards
+    api_health_test.go                # Health endpoint smoke tests (Label: "smoke")
+    api_providers_test.go             # Provider CRUD lifecycle tests (API)
+    api_policies_test.go              # Policy CRUD lifecycle tests (API)
+    sp_container_api_test.go          # Container SP CRUD tests (Label: "sp", "container")
+    sp_container_status_test.go       # Container SP NATS status events (Label: "sp", "container", "nats")
+    sp_acm_cluster_api_test.go        # ACM Cluster SP API tests (Label: "sp", "acm-cluster")
+    cli_version_test.go               # CLI version command test (Label: "smoke", "cli")
+    cli_providers_test.go             # CLI sp provider read tests (Label: "cli")
+    cli_policy_test.go                # CLI policy CRUD tests (Label: "cli")
 ```
 
 ### Running Tests
@@ -111,7 +136,8 @@ tests/
 make test-e2e          # Run all E2E tests (stack must be running)
 make test-smoke        # Run smoke tests only (health checks + CLI version)
 make test-cli          # Run CLI tests only
-make test-sp           # Run service provider tests (SP must be deployed)
+make test-sp           # Run container SP tests (SP must be deployed)
+make test-acm-sp       # Run ACM cluster SP tests (ACM SP must be deployed)
 make test-e2e-full     # Full lifecycle: deploy → test → teardown
 make download-cli      # Download latest DCM CLI from GitHub releases
 ```
@@ -126,6 +152,7 @@ All test targets support JUnit XML output: `make test-e2e JUNIT_REPORT=results.x
 |-------|--------------|-------|
 | **API tests** | HTTP CRUD operations against the gateway | (none) |
 | **SP tests** | Container SP direct API + NATS status events | `sp`, `container` |
+| **ACM SP tests** | ACM Cluster SP API (health, registration, validation, CRUD) | `sp`, `acm-cluster` |
 | **Cluster tests** | Tests requiring `kubectl`/`oc` cluster access | `cluster` |
 | **Disruptive tests** | Tests that stop/start infrastructure (e.g. NATS) | `disruptive` |
 | **CLI tests** | DCM CLI binary against the live stack | `cli` |
@@ -148,10 +175,11 @@ CLI tests are skipped (not failed) if no binary is available.
 - CLI tests use `os/exec` to run the actual binary (not in-process Cobra)
 - `DCM_GATEWAY_URL` env var overrides the gateway endpoint (default: `http://localhost:9080/api/v1alpha1`)
 - `DCM_CONTAINER_SP_URL` env var overrides the container SP endpoint (default: `http://localhost:8082/api/v1alpha1`)
+- `DCM_ACM_CLUSTER_SP_URL` env var overrides the ACM cluster SP endpoint (default: `http://localhost:8083/api/v1alpha1`)
 - `DCM_NATS_URL` env var overrides the NATS server (default: `nats://localhost:4222`)
 - `DCM_CLI_PATH` env var specifies the CLI binary path
-- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `nats`, `cluster`, `disruptive`) enable selective test runs via `--label-filter`
-- SP tests skip gracefully if the container SP isn't reachable (no hard failure)
+- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `acm-cluster`, `nats`, `cluster`, `disruptive`) enable selective test runs via `--label-filter`
+- SP tests skip gracefully if the container SP or ACM cluster SP isn't reachable (no hard failure)
 - Cluster tests skip gracefully if `kubectl`/`oc` is unavailable or the cluster is unreachable
 - Disruptive tests skip if `podman` is unavailable; exclude from normal runs with `--label-filter '!disruptive'`
 

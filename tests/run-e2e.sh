@@ -40,19 +40,25 @@ Deploy passthrough flags (forwarded to deploy-dcm.sh):
   --cleanup-on-failure         Tear down on deployment failure
 
 Service provider flags (forwarded to deploy-dcm.sh):
+  --all-service-providers           Enable all SPs
   --k8s-container-service-provider  Enable the k8s container SP
   --kubevirt-service-provider       Enable the kubevirt SP
-  --all-service-providers           Enable all SPs
+  --acm-cluster-service-provider    Enable the ACM cluster SP
+  --deploy-acm                      Deploy ACM on the cluster (opt-in, heavy)
+  --deploy-mce                      Deploy MCE on the cluster (opt-in, heavy)
   --kubeconfig PATH                 Path to kubeconfig file
   --k8s-container-namespace NS      Namespace for container workloads
+  --acm-cluster-namespace NS        Namespace for ACM clusters
+  --kubevirt-vm-namespace NS        Namespace for kubevirt VMs
   --cluster-api URL                 OpenShift API URL for oc login
   --cluster-username USER           Username for oc login
   --cluster-password PASS           Password for oc login
 
 Environment variables:
-  DCM_CONTAINER_SP_URL   Container SP direct URL (default: http://localhost:8082/api/v1alpha1)
-  DCM_NATS_URL           NATS URL for event tests (default: nats://localhost:4222)
-  DCM_GATEWAY_URL        Gateway URL (default: http://localhost:9080/api/v1alpha1)
+  DCM_CONTAINER_SP_URL     Container SP direct URL (default: http://localhost:8082/api/v1alpha1)
+  DCM_ACM_CLUSTER_SP_URL   ACM Cluster SP direct URL (default: http://localhost:8083/api/v1alpha1)
+  DCM_NATS_URL             NATS URL for event tests (default: nats://localhost:4222)
+  DCM_GATEWAY_URL          Gateway URL (default: http://localhost:9080/api/v1alpha1)
 
 CLI binary resolution order:
   1. --dcm-cli-path flag or DCM_CLI_PATH env var
@@ -152,7 +158,7 @@ LABEL_FILTER=""
 JUNIT_REPORT=""
 DEPLOY_ARGS=()
 ENABLE_CONTAINER_SP=false
-SP_COMPOSE_INJECTED=false
+ENABLE_ACM_CLUSTER_SP=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -186,23 +192,23 @@ while [[ $# -gt 0 ]]; do
         --k8s-container-service-provider)
             ENABLE_CONTAINER_SP=true
             DEPLOY_ARGS+=("$1")
-            if [[ "${SP_COMPOSE_INJECTED}" == "false" ]]; then
-                DEPLOY_ARGS+=("--compose-file" "${SCRIPT_DIR}/compose-sp-test.yaml")
-                SP_COMPOSE_INJECTED=true
-            fi
             shift ;;
         --all-service-providers)
             ENABLE_CONTAINER_SP=true
+            ENABLE_ACM_CLUSTER_SP=true
             DEPLOY_ARGS+=("$1")
-            if [[ "${SP_COMPOSE_INJECTED}" == "false" ]]; then
-                DEPLOY_ARGS+=("--compose-file" "${SCRIPT_DIR}/compose-sp-test.yaml")
-                SP_COMPOSE_INJECTED=true
-            fi
+            shift ;;
+        --acm-cluster-service-provider)
+            ENABLE_ACM_CLUSTER_SP=true
+            DEPLOY_ARGS+=("$1")
             shift ;;
         --kubevirt-service-provider)
             DEPLOY_ARGS+=("$1")
             shift ;;
-        --compose-file|--kubeconfig|--k8s-container-namespace|--cluster-api|--cluster-username|--cluster-password)
+        --deploy-acm|--deploy-mce)
+            DEPLOY_ARGS+=("$1")
+            shift ;;
+        --compose-file|--kubeconfig|--k8s-container-namespace|--acm-cluster-namespace|--kubevirt-vm-namespace|--cluster-api|--cluster-username|--cluster-password|--acm-cluster-sp-repo|--acm-cluster-sp-branch)
             DEPLOY_ARGS+=("$1" "$2")
             shift 2 ;;
         --help)
@@ -246,12 +252,18 @@ if [[ -n "${GATEWAY_URL}" ]]; then
     info "DCM_GATEWAY_URL=${GATEWAY_URL}"
 fi
 
-# Export container SP URL if container SP is enabled.
+# Export SP URLs when providers are enabled.
+if [[ "${ENABLE_CONTAINER_SP}" == "true" ]] || [[ "${ENABLE_ACM_CLUSTER_SP}" == "true" ]]; then
+    export DCM_NATS_URL="${DCM_NATS_URL:-nats://localhost:4222}"
+    info "DCM_NATS_URL=${DCM_NATS_URL}"
+fi
 if [[ "${ENABLE_CONTAINER_SP}" == "true" ]]; then
     export DCM_CONTAINER_SP_URL="${DCM_CONTAINER_SP_URL:-http://localhost:8082/api/v1alpha1}"
-    export DCM_NATS_URL="${DCM_NATS_URL:-nats://localhost:4222}"
     info "DCM_CONTAINER_SP_URL=${DCM_CONTAINER_SP_URL}"
-    info "DCM_NATS_URL=${DCM_NATS_URL}"
+fi
+if [[ "${ENABLE_ACM_CLUSTER_SP}" == "true" ]]; then
+    export DCM_ACM_CLUSTER_SP_URL="${DCM_ACM_CLUSTER_SP_URL:-http://localhost:8083/api/v1alpha1}"
+    info "DCM_ACM_CLUSTER_SP_URL=${DCM_ACM_CLUSTER_SP_URL}"
 fi
 
 # Build ginkgo arguments.

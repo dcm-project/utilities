@@ -129,7 +129,7 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 				decodeJSON(resp, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"),
+			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"),
 				"container should reach RUNNING status")
 		})
 

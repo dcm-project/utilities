@@ -49,8 +49,9 @@ var _ = BeforeSuite(func() {
 	// Resolve CLI binary (tests skip gracefully if not found).
 	initCLI()
 
-	// Probe container SP (tests skip gracefully if not deployed).
+	// Probe service providers (tests skip gracefully if not deployed).
 	initContainerSP()
+	initAcmClusterSP()
 
 	// Resolve cluster CLI for tests that need kubectl/oc.
 	initKubectl()
