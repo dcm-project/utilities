@@ -4,6 +4,11 @@ on:
   pull_request_target:
     types: [opened, ready_for_review]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_url:
+        description: 'PR URL to request review for'
+        required: true
 
 jobs:
   notify:
