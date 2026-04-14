@@ -163,7 +163,6 @@ Shell scripts are linted with [ShellCheck](https://www.shellcheck.net/). CI runs
 ```bash
 shellcheck scripts/*.sh tests/*.sh
 ```
-
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
