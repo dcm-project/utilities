@@ -1,6 +1,6 @@
 # DCM Utilities
 
-Common scripts and tooling shared across the [DCM](https://github.com/dcm-project) ecosystem. Provides the E2E deploy script for bringing up the full DCM stack locally and a Ginkgo/Gomega E2E test suite that validates the stack through the API gateway and DCM CLI.
+Common scripts and tooling shared across the [DCM](https://github.com/dcm-project) ecosystem. Provides the E2E deploy script for bringing up the full DCM stack locally and a Ginkgo/Gomega E2E test suite that validates the stack through the API gateway and DCM CLI. Test
 
 ## Contents
 
