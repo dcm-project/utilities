@@ -118,6 +118,7 @@ EOF
     cat <<EOF
   --deploy-acm                   Deploy ACM on the cluster before starting the stack (opt-in, heavy)
   --deploy-mce                   Deploy MCE on the cluster before starting the stack (opt-in, heavy)
+  --deploy-cnv                   Deploy OpenShift Virtualization (CNV) on the cluster before starting the stack (opt-in, heavy)
   --acm-cluster-sp-repo URL      Git repo for acm-cluster-service-provider (default: ${DEFAULT_ACM_CLUSTER_SP_REPO})
   --acm-cluster-sp-branch REF    Branch to clone (default: ${DEFAULT_ACM_CLUSTER_SP_BRANCH})
   --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted)
@@ -588,6 +589,7 @@ TEAR_DOWN=false
 RUNNING_VERSIONS=false
 CLEANUP_ON_FAILURE=false
 DEPLOY_ACM_MCE=""
+DEPLOY_CNV=false
 ACM_CLUSTER_SP_REPO="${DEFAULT_ACM_CLUSTER_SP_REPO}"
 ACM_CLUSTER_SP_BRANCH="${DEFAULT_ACM_CLUSTER_SP_BRANCH}"
 DCM_KUBECONFIG="${KUBECONFIG:-}"
@@ -642,6 +644,8 @@ while [[ $# -gt 0 ]]; do
                 PROV_ENABLED[i]=true
             done
             shift ;;
+        --deploy-cnv)
+            DEPLOY_CNV=true; shift ;;
         --deploy-acm)
             [[ -n "${DEPLOY_ACM_MCE}" ]] && { err "--deploy-acm and --deploy-mce are mutually exclusive"; exit 1; }
             DEPLOY_ACM_MCE="acm"; shift ;;
@@ -878,6 +882,102 @@ CREOF
                 exit 1
             fi
         fi
+    fi
+fi
+
+# --- CNV / OpenShift Virtualization deployment ----------------------------- #
+
+if [[ "${DEPLOY_CNV}" == true ]]; then
+    CNV_NAMESPACE="openshift-cnv"
+    CNV_CSV_PREFIX="kubevirt-hyperconverged"
+    CNV_CR_NAME="kubevirt-hyperconverged"
+
+    # Check if HyperConverged CR already exists and is ready
+    cnv_csv_phase=$(oc --kubeconfig="${DCM_KUBECONFIG}" get csv -n "${CNV_NAMESPACE}" \
+        --no-headers 2>/dev/null | awk "/${CNV_CSV_PREFIX}/{print \$NF}" | head -1)
+
+    if [[ "${cnv_csv_phase}" == "Succeeded" ]]; then
+        log "OpenShift Virtualization (CNV) is already installed (CSV: Succeeded) — skipping deployment"
+    else
+        log "Deploying OpenShift Virtualization (CNV) on the cluster (this may take 10-20 minutes)"
+
+        # Create namespace
+        oc --kubeconfig="${DCM_KUBECONFIG}" create namespace "${CNV_NAMESPACE}" \
+            --dry-run=client -o yaml | oc --kubeconfig="${DCM_KUBECONFIG}" apply -f -
+
+        # Create OperatorGroup
+        oc --kubeconfig="${DCM_KUBECONFIG}" apply -f - <<CNVEOF
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: kubevirt-hyperconverged-group
+  namespace: ${CNV_NAMESPACE}
+spec:
+  targetNamespaces:
+    - ${CNV_NAMESPACE}
+CNVEOF
+
+        # Create Subscription
+        oc --kubeconfig="${DCM_KUBECONFIG}" apply -f - <<CNVEOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: hco-operatorhub
+  namespace: ${CNV_NAMESPACE}
+spec:
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  name: kubevirt-hyperconverged
+  channel: "stable"
+CNVEOF
+
+        # Wait for CSV to succeed
+        cnv_timeout="${DEPLOY_TIMEOUT:-1200}"
+        cnv_elapsed=0
+        log "Waiting for CNV CSV to reach Succeeded (timeout: ${cnv_timeout}s)"
+        while [[ ${cnv_elapsed} -lt ${cnv_timeout} ]]; do
+            cnv_csv_phase=$(oc --kubeconfig="${DCM_KUBECONFIG}" get csv -n "${CNV_NAMESPACE}" \
+                --no-headers 2>/dev/null | awk "/${CNV_CSV_PREFIX}/{print \$NF}" | head -1)
+            [[ "${cnv_csv_phase}" == "Succeeded" ]] && break
+            info "CNV CSV phase: ${cnv_csv_phase:-Pending} (${cnv_elapsed}s elapsed)"
+            sleep 30
+            cnv_elapsed=$((cnv_elapsed + 30))
+        done
+
+        if [[ "${cnv_csv_phase}" != "Succeeded" ]]; then
+            err "CNV CSV did not reach Succeeded within ${cnv_timeout}s"
+            exit 1
+        fi
+
+        # Create HyperConverged CR
+        oc --kubeconfig="${DCM_KUBECONFIG}" apply -f - <<CNVEOF
+apiVersion: hco.kubevirt.io/v1beta1
+kind: HyperConverged
+metadata:
+  name: ${CNV_CR_NAME}
+  namespace: ${CNV_NAMESPACE}
+spec: {}
+CNVEOF
+
+        # Wait for HyperConverged to be Available
+        cnv_elapsed=0
+        log "Waiting for HyperConverged to be Available (timeout: ${cnv_timeout}s)"
+        while [[ ${cnv_elapsed} -lt ${cnv_timeout} ]]; do
+            cnv_ready=$(oc --kubeconfig="${DCM_KUBECONFIG}" get hyperconverged "${CNV_CR_NAME}" \
+                -n "${CNV_NAMESPACE}" -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' \
+                2>/dev/null || echo "")
+            [[ "${cnv_ready}" == "True" ]] && break
+            info "HyperConverged Available: ${cnv_ready:-Unknown} (${cnv_elapsed}s elapsed)"
+            sleep 30
+            cnv_elapsed=$((cnv_elapsed + 30))
+        done
+
+        if [[ "${cnv_ready}" != "True" ]]; then
+            err "HyperConverged did not become Available within ${cnv_timeout}s"
+            exit 1
+        fi
+
+        log "OpenShift Virtualization (CNV) is ready"
     fi
 fi
 
