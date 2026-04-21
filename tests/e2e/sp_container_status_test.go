@@ -348,7 +348,7 @@ var _ = Describe("Container SP Status Events", Label("sp", "container", "nats"),
 		It("delivers status events after NATS restart", func() {
 			natsContainer := findComposeContainer("nats")
 
-			By("creating a container and confirming initial event delivery")
+			By("subscribing before create, then confirming status RUNNING")
 			collector1 := newNATSCollector(natsStatusSubject)
 			name := uniqueName("e2e-nats")
 			body := createTestContainer(containerSpec(name, "docker.io/library/nginx:alpine", false))
