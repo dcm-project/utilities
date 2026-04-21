@@ -1,38 +1,8 @@
-# Compose override: adds the ACM cluster service provider to the DCM stack.
-# The api-gateway compose.yaml does not yet include this service, so this
-# override defines it from the upstream image on Quay.
-#
-# Uses :latest intentionally — the SP is under active development and E2E
-# tests should run against the most recent build. pull_policy: always
-# ensures each deploy gets the newest image. Pin to a digest or tag when
-# the SP stabilizes.
-#
+# Compose override for E2E testing: publishes the ACM cluster SP port to the host.
 # Injected automatically by deploy-dcm.sh via the provider registry
 # (providers/acm-cluster.conf → COMPOSE_OVERRIDE).
-#
-# Required env vars (exported by deploy-dcm.sh when --acm-cluster-service-provider is set):
-#   ACM_CLUSTER_SP_KUBECONFIG    — path to kubeconfig with access to the ACM Hub cluster
-#   ACM_CLUSTER_SP_PULL_SECRET   — base64-encoded .dockerconfigjson for pulling OCP release images
 
 services:
   acm-cluster-service-provider:
-    image: quay.io/dcm-project/acm-cluster-service-provider:latest
-    pull_policy: always
-    environment:
-      SP_NAME: ${ACM_CLUSTER_SP_NAME:-acm-cluster-sp}
-      SP_ENDPOINT: "http://acm-cluster-service-provider:8080"
-      DCM_REGISTRATION_URL: "http://service-provider-manager:8080/api/v1alpha1"
-      SP_NATS_URL: "nats://nats:4222"
-      SP_CLUSTER_NAMESPACE: ${ACM_CLUSTER_SP_NAMESPACE:-clusters}
-      SP_ENABLED_PLATFORMS: ${ACM_CLUSTER_SP_PLATFORMS:-kubevirt,baremetal}
-      SP_PULL_SECRET: ${ACM_CLUSTER_SP_PULL_SECRET:-}
-      KUBECONFIG: /kubeconfig
-    expose:
-      - "8080"
     ports:
       - "8083:8080"
-    volumes:
-      - ${ACM_CLUSTER_SP_KUBECONFIG:-~/.kube/config}:/kubeconfig:ro,z
-    depends_on:
-      service-provider-manager: { condition: service_started }
-      nats: { condition: service_started }
