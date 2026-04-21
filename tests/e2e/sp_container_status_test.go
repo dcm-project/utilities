@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -348,21 +349,24 @@ var _ = Describe("Container SP Status Events", Label("sp", "container", "nats"),
 			natsContainer := findComposeContainer("nats")
 
 			By("creating a container and confirming initial event delivery")
+			collector1 := newNATSCollector(natsStatusSubject)
 			name := uniqueName("e2e-nats")
 			body := createTestContainer(containerSpec(name, "docker.io/library/nginx:alpine", false))
 			containerID = body["id"].(string)
 
-			collector1 := newNATSCollector(natsStatusSubject)
 			collector1.WaitForStatus(containerID, "RUNNING", 60*time.Second)
 			collector1.Close()
 
-			By("stopping the NATS container")
-			out, err := exec.Command(podmanBin, "stop", "-t", "5", natsContainer).CombinedOutput()
-			Expect(err).NotTo(HaveOccurred(), "failed to stop NATS: %s", string(out))
-
 			By("restarting the NATS container")
-			out, err = exec.Command(podmanBin, "start", natsContainer).CombinedOutput()
-			Expect(err).NotTo(HaveOccurred(), "failed to start NATS: %s", string(out))
+			out, err := exec.Command(podmanBin, "restart", "-t", "5", natsContainer).CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), "failed to restart NATS: %s", string(out))
+
+			By("verifying the NATS container is running after restart")
+			Eventually(func() string {
+				state, _ := exec.Command(podmanBin, "inspect", "--format", "{{.State.Status}}", natsContainer).CombinedOutput()
+				return strings.TrimSpace(string(state))
+			}).WithTimeout(15 * time.Second).WithPolling(1 * time.Second).Should(Equal("running"),
+				"NATS container should be in running state after restart")
 
 			By("waiting for NATS to be connectable again")
 			Eventually(func() error {
