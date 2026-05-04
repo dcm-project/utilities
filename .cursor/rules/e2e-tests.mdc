@@ -16,13 +16,14 @@ Files follow `{layer}_{subject}_test.go` with a matching `{layer}_helpers_test.g
 | `cli_` | CLI binary (`runDCM` → `os/exec`) | `cli_helpers_test.go` |
 | `sp_container_` | Container SP direct API + NATS (`doContainerSPRequest` → `localhost:8082`) | `sp_helpers_test.go` |
 | `sp_acm_cluster_` | ACM Cluster SP direct API (`doAcmClusterSPRequest` → `localhost:8083`) | `sp_acm_cluster_helpers_test.go` |
+| `core_` | Cross-service provisioning flow via gateway (`doRequest`) | `api_helpers_test.go`, `sp_helpers_test.go` |
 
 When adding a new service provider, add `sp_{provider}_{concern}_test.go` (e.g. `sp_kubevirt_api_test.go`). Each provider gets its own helpers file (`sp_{provider}_helpers_test.go`). Shared infrastructure (kubectl, podman, NATS collector) stays in `sp_helpers_test.go`.
 
 ## Go Conventions
 - All files start with `//go:build e2e` and `package e2e_test`
 - Dot-import Ginkgo and Gomega: `. "github.com/onsi/ginkgo/v2"`
-- Use Ginkgo labels for selective runs: `Label("sp", "container")`, `Label("sp", "acm-cluster")`, `Label("cli")`, `Label("smoke")`, `Label("cluster")`, `Label("disruptive")`
+- Use Ginkgo labels for selective runs: `Label("sp", "container")`, `Label("sp", "acm-cluster")`, `Label("core", "platform")`, `Label("cli")`, `Label("smoke")`, `Label("cluster")`, `Label("disruptive")`
 - Ordered contexts need `AfterAll` cleanup; standalone tests use `BeforeEach`/`AfterEach`
 - Tests that need optional infrastructure call `requireCLI()`, `requireContainerSP()`, `requireAcmClusterSP()`, `requireKubectl()`, or `requirePodman()` to skip gracefully
 - `BeforeSuite` in `api_helpers_test.go` is the single initialization point — add `init*()` calls there for new subsystems
@@ -41,6 +42,7 @@ When adding a new service provider, add `sp_{provider}_{concern}_test.go` (e.g. 
 | `DCM_ACM_CLUSTER_SP_URL` | `http://localhost:8083/api/v1alpha1` | ACM Cluster SP direct API |
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS for status events |
 | `DCM_CLI_PATH` | (auto-resolved) | CLI binary path |
+| `DCM_CONTAINER_PROVIDER_NAME` | (first container provider) | Target a specific container provider in core platform tests |
 
 ## Compose Overrides
 SP compose overrides are managed by the provider registry (`providers/*.conf`). Each provider's `COMPOSE_OVERRIDE` key specifies its overlay file, which `deploy-dcm.sh` injects automatically when the provider is enabled:

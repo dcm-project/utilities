@@ -125,6 +125,7 @@ tests/
     sp_container_api_test.go          # Container SP CRUD tests (Label: "sp", "container")
     sp_container_status_test.go       # Container SP NATS status events (Label: "sp", "container", "nats")
     sp_acm_cluster_api_test.go        # ACM Cluster SP API tests (Label: "sp", "acm-cluster")
+    core_platform_test.go             # Core platform provisioning happy path (Label: "core", "platform")
     cli_version_test.go               # CLI version command test (Label: "smoke", "cli")
     cli_providers_test.go             # CLI sp provider read tests (Label: "cli")
     cli_policy_test.go                # CLI policy CRUD tests (Label: "cli")
@@ -138,6 +139,7 @@ make test-smoke        # Run smoke tests only (health checks + CLI version)
 make test-cli          # Run CLI tests only
 make test-sp           # Run container SP tests (SP must be deployed)
 make test-acm-sp       # Run ACM cluster SP tests (ACM SP must be deployed)
+make test-core         # Run core platform tests (full control plane provisioning flow)
 make test-e2e-full     # Full lifecycle: deploy → test → teardown
 make download-cli      # Download latest DCM CLI from GitHub releases
 ```
@@ -150,6 +152,7 @@ All test targets support JUnit XML output: `make test-e2e JUNIT_REPORT=results.x
 
 | Layer | What it tests | Label |
 |-------|--------------|-------|
+| **Core platform tests** | Full provisioning flow through control plane | `core`, `platform` |
 | **API tests** | HTTP CRUD operations against the gateway | (none) |
 | **SP tests** | Container SP direct API + NATS status events | `sp`, `container` |
 | **ACM SP tests** | ACM Cluster SP API (health, registration, validation, CRUD) | `sp`, `acm-cluster` |
@@ -178,7 +181,8 @@ CLI tests are skipped (not failed) if no binary is available.
 - `DCM_ACM_CLUSTER_SP_URL` env var overrides the ACM cluster SP endpoint (default: `http://localhost:8083/api/v1alpha1`)
 - `DCM_NATS_URL` env var overrides the NATS server (default: `nats://localhost:4222`)
 - `DCM_CLI_PATH` env var specifies the CLI binary path
-- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `acm-cluster`, `nats`, `cluster`, `disruptive`) enable selective test runs via `--label-filter`
+- `DCM_CONTAINER_PROVIDER_NAME` env var overrides which container provider to target in core platform tests (default: first `service_type=container` provider found)
+- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `acm-cluster`, `nats`, `cluster`, `disruptive`, `core`, `platform`) enable selective test runs via `--label-filter`
 - SP tests skip gracefully if the container SP or ACM cluster SP isn't reachable (no hard failure)
 - Cluster tests skip gracefully if `kubectl`/`oc` is unavailable or the cluster is unreachable
 - Disruptive tests skip if `podman` is unavailable; exclude from normal runs with `--label-filter '!disruptive'`
