@@ -74,7 +74,8 @@ var _ = Describe("Core Platform", Label("core", "platform"), func() {
 
 			override := os.Getenv("DCM_CONTAINER_PROVIDER_NAME")
 			for _, p := range providers {
-				provider := p.(map[string]interface{})
+				provider, ok := p.(map[string]interface{})
+				Expect(ok).To(BeTrue(), "provider entry should be a map")
 				if st, _ := provider["service_type"].(string); st == "container" {
 					name, _ := provider["name"].(string)
 					if override != "" && name != override {
@@ -106,7 +107,8 @@ var _ = Describe("Core Platform", Label("core", "platform"), func() {
 
 			var found bool
 			for _, r := range results {
-				st, _ := r.(map[string]interface{})
+				st, ok := r.(map[string]interface{})
+				Expect(ok).To(BeTrue(), "service type entry should be a map")
 				if stype, _ := st["service_type"].(string); stype == "container" {
 					found = true
 					break
