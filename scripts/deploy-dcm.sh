@@ -26,6 +26,18 @@ readonly HEALTH_ENDPOINTS=(
 readonly DEFAULT_ACM_CLUSTER_SP_REPO="https://github.com/dcm-project/acm-cluster-service-provider.git"
 readonly DEFAULT_ACM_CLUSTER_SP_BRANCH="main"
 
+readonly QUAY_VERSION_REPO="catalog-manager"
+readonly VERSION_ENV_VARS=(
+    SERVICE_PROVIDER_MANAGER_VERSION
+    CATALOG_MANAGER_VERSION
+    POLICY_MANAGER_VERSION
+    PLACEMENT_MANAGER_VERSION
+    KUBEVIRT_SERVICE_PROVIDER_VERSION
+    K8S_CONTAINER_SERVICE_PROVIDER_VERSION
+    ACM_CLUSTER_SERVICE_PROVIDER_VERSION
+    THREE_TIER_DEMO_SERVICE_PROVIDER_VERSION
+)
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- Provider registry ----------------------------------------------------- #
@@ -103,6 +115,7 @@ Deploy the full DCM stack for E2E testing. The api-gateway repo contains the
 compose.yaml that orchestrates all DCM services (managers, gateway, infra).
 
 Options:
+  --version TAG                  Pin all DCM images to TAG (main, release, or explicit e.g. v0.1.0-rc.1)
   --api-gateway-repo URL         Git repo for api-gateway (default: ${DEFAULT_API_GATEWAY_REPO})
   --api-gateway-branch REF       Branch to clone (default: ${DEFAULT_API_GATEWAY_BRANCH})
   --api-gateway-dir PATH         Directory to clone api-gateway into (default: ${DEFAULT_API_GATEWAY_TMP_DIR})
@@ -147,6 +160,7 @@ Cluster authentication (when any service provider is enabled):
     3. oc login with --cluster-api + --cluster-password
 
 Environment variables (flags take precedence):
+  DCM_VERSION               Same as --version
   API_GATEWAY_REPO          Same as --api-gateway-repo
   API_GATEWAY_BRANCH        Same as --api-gateway-branch
   API_GATEWAY_TMP_DIR       Same as --api-gateway-dir
@@ -170,6 +184,8 @@ EOF
 
 Examples:
   $(basename "$0")
+  $(basename "$0") --version v0.1.0-rc.1
+  $(basename "$0") --version release
   $(basename "$0") --api-gateway-branch feature-x
   $(basename "$0") --kubevirt-service-provider --kubeconfig ~/.kube/config
   $(basename "$0") --k8s-container-service-provider
@@ -452,6 +468,29 @@ verify_health() {
     fi
 }
 
+# --- Version resolution ---------------------------------------------------- #
+
+resolve_latest_version() {
+    local api_url="https://quay.io/api/v1/repository/dcm-project/${QUAY_VERSION_REPO}/tag/?onlyActiveTags=true&limit=100"
+    local api_response
+    api_response=$(curl -s --connect-timeout 5 --max-time 10 "${api_url}" 2>/dev/null || echo "")
+
+    if [[ -z "${api_response}" ]]; then
+        err "Quay API unreachable — cannot resolve latest version"
+        return 1
+    fi
+
+    local latest
+    latest=$(echo "${api_response}" | jq -r '.tags[].name' 2>/dev/null | grep -E '^v[0-9]' | sort -V | tail -1)
+
+    if [[ -z "${latest}" ]]; then
+        err "No semver tags found in quay.io/dcm-project/${QUAY_VERSION_REPO}"
+        return 1
+    fi
+
+    echo "${latest}"
+}
+
 # --- Running versions ------------------------------------------------------ #
 
 resolve_git_sha() {
@@ -582,7 +621,10 @@ collect_provider_compose() {
 
 # --- Argument parsing ------------------------------------------------------ #
 
+DCM_VERSION="${DCM_VERSION:-}"
 API_GATEWAY_REPO="${API_GATEWAY_REPO:-${DEFAULT_API_GATEWAY_REPO}}"
+API_GATEWAY_BRANCH_EXPLICIT=false
+[[ -n "${API_GATEWAY_BRANCH:-}" ]] && API_GATEWAY_BRANCH_EXPLICIT=true
 API_GATEWAY_BRANCH="${API_GATEWAY_BRANCH:-${DEFAULT_API_GATEWAY_BRANCH}}"
 API_GATEWAY_TMP_DIR="${API_GATEWAY_TMP_DIR:-${DEFAULT_API_GATEWAY_TMP_DIR}}"
 TEAR_DOWN=false
@@ -630,12 +672,16 @@ MATCHED_TYPE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --version)
+            require_arg "$1" "${2:-}"
+            DCM_VERSION="${2:-}"; shift 2 ;;
         --api-gateway-repo)
             require_arg "$1" "${2:-}"
             API_GATEWAY_REPO="${2:-}"; shift 2 ;;
         --api-gateway-branch)
             require_arg "$1" "${2:-}"
-            API_GATEWAY_BRANCH="${2:-}"; shift 2 ;;
+            API_GATEWAY_BRANCH="${2:-}"
+            API_GATEWAY_BRANCH_EXPLICIT=true; shift 2 ;;
         --api-gateway-dir)
             require_arg "$1" "${2:-}"
             API_GATEWAY_TMP_DIR="${2:-}"; shift 2 ;;
@@ -979,6 +1025,27 @@ CNVEOF
 
         log "OpenShift Virtualization (CNV) is ready"
     fi
+fi
+
+# --- Version pinning ------------------------------------------------------- #
+
+if [[ -n "${DCM_VERSION}" ]]; then
+    if [[ "${DCM_VERSION}" == "release" ]]; then
+        log "Resolving latest release version from Quay.io"
+        DCM_VERSION=$(resolve_latest_version) || exit 1
+        info "Resolved: ${DCM_VERSION}"
+    fi
+
+    if [[ "${DCM_VERSION}" != "main" ]] && [[ "${API_GATEWAY_BRANCH_EXPLICIT}" == false ]]; then
+        RELEASE_TAG="${DCM_VERSION%%-*}"
+        API_GATEWAY_BRANCH="release/${RELEASE_TAG}"
+        info "Auto-derived api-gateway branch: ${API_GATEWAY_BRANCH}"
+    fi
+
+    log "Pinning all DCM images to version: ${DCM_VERSION}"
+    for var in "${VERSION_ENV_VARS[@]}"; do
+        export "${var}=${DCM_VERSION}"
+    done
 fi
 
 # --- Clone ----------------------------------------------------------------- #

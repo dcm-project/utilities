@@ -35,6 +35,13 @@ Deploys the full DCM stack for E2E testing by cloning api-gateway (which owns `c
 - `--running-versions`: query already-running containers, resolve git SHAs via Quay.io API, write `dcm-versions.json`
 - `--tear-down`: stop containers, remove volumes, delete deploy directory
 
+**Version pinning:** Pass `--version <TAG>` to pin all DCM service images to a specific version. Three modes:
+- `--version main` — use `:main` images (the default)
+- `--version v0.1.0-rc.1` — pin all images to an explicit tag
+- `--version release` — auto-resolve the latest semver tag from Quay.io
+
+When a non-main version is specified, `--api-gateway-branch` is auto-derived to the corresponding release branch (e.g. `v0.1.0-rc.1` → `release/v0.1.0`) unless explicitly passed.
+
 **Service providers:** Configured via `providers/*.conf` files (see "Provider Registry" below). Enable with `--<label>-service-provider` or `--all-service-providers`.
 
 **ACM/MCE deployment:** Pass `--deploy-acm` or `--deploy-mce` to install Red Hat ACM or MCE on the OCP cluster before starting the DCM stack. This clones the [acm-cluster-service-provider](https://github.com/dcm-project/acm-cluster-service-provider) repo and runs its `hack/deploy-acm-mce.sh` script. Can take 10–20 minutes. Requires `oc` and `jq`. These are opt-in flags, not enabled by default.

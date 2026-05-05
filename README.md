@@ -53,20 +53,26 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 # 1. Deploy the full DCM stack (no providers)
 ./scripts/deploy-dcm.sh
 
-# 2. Deploy with the k8s container service provider (auto-detects cluster)
+# 2. Deploy a specific release version (auto-derives release branch)
+./scripts/deploy-dcm.sh --version v0.1.0-rc.1
+
+# 3. Deploy the latest release (resolves from Quay.io)
+./scripts/deploy-dcm.sh --version release
+
+# 4. Deploy with the k8s container service provider (auto-detects cluster)
 ./scripts/deploy-dcm.sh --k8s-container-service-provider
 
-# 3. Deploy with KubeVirt + explicit kubeconfig
+# 5. Deploy with KubeVirt + explicit kubeconfig
 ./scripts/deploy-dcm.sh --kubevirt-service-provider --kubeconfig ~/.kube/config
 
-# 4. Deploy all providers, logging in via oc
+# 6. Deploy all providers, logging in via oc
 ./scripts/deploy-dcm.sh --all-service-providers \
     --cluster-api https://api.cluster.example.com --cluster-password secret
 
-# 5. Deploy ACM cluster provider (install ACM first if needed)
+# 7. Deploy ACM cluster provider (install ACM first if needed)
 ./scripts/deploy-dcm.sh --acm-cluster-service-provider --deploy-acm --kubeconfig ~/.kube/config
 
-# 6. Tear down when done
+# 8. Tear down when done
 ./scripts/deploy-dcm.sh --tear-down
 ```
 
