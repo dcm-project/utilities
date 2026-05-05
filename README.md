@@ -94,6 +94,7 @@ make test-smoke    # Run health checks + CLI version only
 make test-cli      # Run CLI tests only
 make test-sp       # Run container SP tests (SP must be deployed)
 make test-acm-sp   # Run ACM cluster SP tests (ACM SP must be deployed)
+make test-core     # Run core platform tests (full provisioning flow)
 make e2e-down      # Tear down
 make download-cli  # Download latest DCM CLI without running tests
 
