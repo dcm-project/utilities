@@ -307,8 +307,11 @@ var _ = Describe("Container SP Status Events", Label("sp", "container", "nats"),
 			By("waiting for RUNNING status")
 			collector.WaitForStatus(containerID, "RUNNING", 60*time.Second)
 
+			By("resolving the actual Deployment name (SP uses GenerateName)")
+			deployName := findDeploymentName(containerID)
+
 			By("scaling the Deployment to zero via kubectl")
-			_, err := runKubectl("scale", "deployment", name, "--replicas=0")
+			_, err := runKubectl("scale", "deployment", deployName, "--replicas=0")
 			Expect(err).NotTo(HaveOccurred())
 
 			By("waiting for a non-RUNNING status event")
