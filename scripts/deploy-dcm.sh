@@ -471,7 +471,7 @@ verify_health() {
 # --- Version resolution ---------------------------------------------------- #
 
 resolve_latest_version() {
-    local api_url="https://quay.io/api/v1/repository/dcm-project/${QUAY_VERSION_REPO}/tag/?onlyActiveTags=true&limit=100"
+    local api_url="https://quay.io/api/v1/repository/dcm-project/${QUAY_VERSION_REPO}/tag/?onlyActiveTags=true&limit=100&filter_tag_name=like:v%"
     local api_response
     api_response=$(curl -s --connect-timeout 5 --max-time 10 "${api_url}" 2>/dev/null || echo "")
 
