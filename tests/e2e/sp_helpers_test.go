@@ -274,12 +274,31 @@ func requireKubectl() {
 	}
 }
 
-// runKubectl executes a kubectl/oc command and returns stdout.
+// runKubectl executes a kubectl/oc command and returns combined output.
 func runKubectl(args ...string) (string, error) {
 	fullArgs := append([]string{"-n", spNamespace}, args...)
 	cmd := exec.Command(kubectlBin, fullArgs...)
 	out, err := cmd.CombinedOutput()
+	if err != nil {
+		GinkgoWriter.Printf("kubectl %v failed: %s\n", args, string(out))
+	}
 	return string(out), err
+}
+
+// findDeploymentName returns the Kubernetes Deployment name for a DCM
+// container instance. The SP uses GenerateName so the actual Deployment
+// name has a random suffix; this helper resolves it via label selector.
+func findDeploymentName(containerID string) string {
+	selector := "dcm.project/dcm-instance-id=" + containerID
+	out, err := runKubectl("get", "deployment",
+		"-l", selector,
+		"-o", "jsonpath={.items[0].metadata.name}")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(),
+		"failed to look up Deployment for container %s", containerID)
+	name := strings.TrimSpace(out)
+	ExpectWithOffset(1, name).NotTo(BeEmpty(),
+		"no Deployment found with label %s", selector)
+	return name
 }
 
 
