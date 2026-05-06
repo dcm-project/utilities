@@ -15,6 +15,18 @@ Deploy the full DCM stack for E2E testing using `scripts/deploy-dcm.sh`.
 ./scripts/deploy-dcm.sh
 ```
 
+### Deploy a Specific Version
+```bash
+# Pin all images to an explicit tag (auto-derives release branch)
+./scripts/deploy-dcm.sh --version v0.1.0-rc.1
+
+# Auto-resolve the latest semver tag from Quay.io
+./scripts/deploy-dcm.sh --version release
+
+# Explicit version with a custom api-gateway branch
+./scripts/deploy-dcm.sh --version v0.1.0-rc.1 --api-gateway-branch my-branch
+```
+
 ### Deploy from a Different Branch
 ```bash
 ./scripts/deploy-dcm.sh --api-gateway-branch feature-x
@@ -77,6 +89,7 @@ When any service provider is enabled, the script resolves cluster access in this
 
 | Variable | Flag equivalent |
 |----------|----------------|
+| `DCM_VERSION` | `--version` |
 | `API_GATEWAY_REPO` | `--api-gateway-repo` |
 | `API_GATEWAY_BRANCH` | `--api-gateway-branch` |
 | `API_GATEWAY_TMP_DIR` | `--api-gateway-dir` |
