@@ -26,7 +26,7 @@ var _ = Describe("Health Endpoints", Label("smoke"), func() {
 
 			var body map[string]interface{}
 			decodeJSON(resp, &body)
-			Expect(body).To(HaveKeyWithValue("status", BeElementOf("ok", "healthy")))
+			Expect(body).To(HaveKeyWithValue("status", "ok"))
 		})
 	}
 })
