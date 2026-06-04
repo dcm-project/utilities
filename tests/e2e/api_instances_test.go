@@ -90,30 +90,30 @@ var _ = Describe("Service Type Instances API", func() {
 			Expect(resourceID).NotTo(BeEmpty(), "resource_id should be set synchronously by placement")
 			GinkgoWriter.Printf("Created catalog-item-instance: %s (resource_id=%s)\n", instanceID, resourceID)
 
-		By("waiting for the service-type-instance to be queryable")
-		Eventually(func() int {
-			r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
-			if e != nil {
-				return 0
-			}
-			defer r.Body.Close()
-			return r.StatusCode
-		}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Equal(http.StatusOK))
-
-		By("logging list-response field names for diagnostics")
-		diagResp, diagErr := doRequest(http.MethodGet, "/service-type-instances?max_page_size=1", "")
-		if diagErr == nil && diagResp.StatusCode == http.StatusOK {
-			var diagBody map[string]interface{}
-			decodeJSON(diagResp, &diagBody)
-			if insts, ok := diagBody["instances"].([]interface{}); ok && len(insts) > 0 {
-				first, _ := insts[0].(map[string]interface{})
-				keys := make([]string, 0, len(first))
-				for k := range first {
-					keys = append(keys, k)
+			By("waiting for the service-type-instance to be queryable")
+			Eventually(func() int {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return 0
 				}
-				GinkgoWriter.Printf("Instance list-response fields: %v\n", keys)
+				defer r.Body.Close()
+				return r.StatusCode
+			}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Equal(http.StatusOK))
+
+			By("logging list-response field names for diagnostics")
+			diagResp, diagErr := doRequest(http.MethodGet, "/service-type-instances?max_page_size=1", "")
+			if diagErr == nil && diagResp.StatusCode == http.StatusOK {
+				var diagBody map[string]interface{}
+				decodeJSON(diagResp, &diagBody)
+				if insts, ok := diagBody["instances"].([]interface{}); ok && len(insts) > 0 {
+					first, _ := insts[0].(map[string]interface{})
+					keys := make([]string, 0, len(first))
+					for k := range first {
+						keys = append(keys, k)
+					}
+					GinkgoWriter.Printf("Instance list-response fields: %v\n", keys)
+				}
 			}
-		}
 		})
 
 		AfterAll(func() {
