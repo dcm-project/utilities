@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -89,15 +90,30 @@ var _ = Describe("Service Type Instances API", func() {
 			Expect(resourceID).NotTo(BeEmpty(), "resource_id should be set synchronously by placement")
 			GinkgoWriter.Printf("Created catalog-item-instance: %s (resource_id=%s)\n", instanceID, resourceID)
 
-			By("waiting for the service-type-instance to be queryable")
-			Eventually(func() int {
-				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
-				if e != nil {
-					return 0
+		By("waiting for the service-type-instance to be queryable")
+		Eventually(func() int {
+			r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+			if e != nil {
+				return 0
+			}
+			defer r.Body.Close()
+			return r.StatusCode
+		}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Equal(http.StatusOK))
+
+		By("logging list-response field names for diagnostics")
+		diagResp, diagErr := doRequest(http.MethodGet, "/service-type-instances?max_page_size=1", "")
+		if diagErr == nil && diagResp.StatusCode == http.StatusOK {
+			var diagBody map[string]interface{}
+			decodeJSON(diagResp, &diagBody)
+			if insts, ok := diagBody["instances"].([]interface{}); ok && len(insts) > 0 {
+				first, _ := insts[0].(map[string]interface{})
+				keys := make([]string, 0, len(first))
+				for k := range first {
+					keys = append(keys, k)
 				}
-				defer r.Body.Close()
-				return r.StatusCode
-			}).WithTimeout(30 * time.Second).WithPolling(2 * time.Second).Should(Equal(http.StatusOK))
+				GinkgoWriter.Printf("Instance list-response fields: %v\n", keys)
+			}
+		}
 		})
 
 		AfterAll(func() {
@@ -331,7 +347,8 @@ var _ = Describe("Service Type Instances API", func() {
 
 		It("rejects or ignores special characters in service_type", func() {
 			for _, malicious := range []string{"../admin", "'; DROP TABLE--", "<script>", "container&provider=x"} {
-				resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type="+malicious, "")
+				encoded := url.QueryEscape(malicious)
+				resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type="+encoded, "")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.StatusCode).To(SatisfyAny(
 					Equal(http.StatusOK),
@@ -397,7 +414,8 @@ var _ = Describe("Service Type Instances API", func() {
 
 		It("does not trim whitespace from service_type value", func() {
 			for _, padded := range []string{" container", "container ", " container "} {
-				resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type="+padded, "")
+				encoded := url.QueryEscape(padded)
+				resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type="+encoded, "")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.StatusCode).To(SatisfyAny(
 					Equal(http.StatusOK),
