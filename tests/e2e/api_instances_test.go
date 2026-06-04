@@ -242,7 +242,8 @@ var _ = Describe("Service Type Instances API", func() {
 			decodeJSON(resp, &page1)
 			Expect(page1).To(HaveKey("instances"))
 
-			instances := page1["instances"].([]interface{})
+			instances, ok := page1["instances"].([]interface{})
+			Expect(ok).To(BeTrue(), "instances should be an array")
 			Expect(len(instances)).To(BeNumerically("<=", 1),
 				"page size should be respected with filter")
 
@@ -256,6 +257,255 @@ var _ = Describe("Service Type Instances API", func() {
 				decodeJSON(resp2, &page2)
 				Expect(page2).To(HaveKey("instances"))
 			}
+		})
+
+		It("stores service_type derived from the provider on the instance", func() {
+			resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var body map[string]interface{}
+			decodeJSON(resp, &body)
+
+			spec, ok := body["spec"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "instance should have a spec object")
+			Expect(spec["service_type"]).To(Equal("container"),
+				"spec.service_type should match the provider's registered service type")
+		})
+
+		It("treats service_type filter as case-sensitive", func() {
+			for _, variant := range []string{"Container", "CONTAINER", "ContaineR"} {
+				resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type="+variant, "")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+				var body map[string]interface{}
+				decodeJSON(resp, &body)
+				Expect(body).To(HaveKey("instances"))
+
+				instances, ok := body["instances"].([]interface{})
+				Expect(ok).To(BeTrue())
+
+				for _, inst := range instances {
+					i := inst.(map[string]interface{})
+					Expect(i["id"]).NotTo(Equal(resourceID),
+						"instance should not appear for case variant %q", variant)
+				}
+			}
+		})
+
+		It("handles empty service_type parameter gracefully", func() {
+			resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type=", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(SatisfyAny(
+				Equal(http.StatusOK),
+				Equal(http.StatusBadRequest),
+			), "empty service_type should either return all instances or a 400 error")
+
+			if resp.StatusCode == http.StatusOK {
+				var body map[string]interface{}
+				decodeJSON(resp, &body)
+				Expect(body).To(HaveKey("instances"))
+
+				instances, ok := body["instances"].([]interface{})
+				Expect(ok).To(BeTrue())
+
+				var found bool
+				for _, inst := range instances {
+					i := inst.(map[string]interface{})
+					if i["id"] == resourceID {
+						found = true
+						break
+					}
+				}
+				Expect(found).To(BeTrue(),
+					"empty service_type should behave like no filter (return all)")
+			}
+		})
+	})
+
+	Context("service_type filter edge cases", func() {
+		BeforeEach(func() {
+			requireContainerSP()
+		})
+
+		It("rejects or ignores special characters in service_type", func() {
+			for _, malicious := range []string{"../admin", "'; DROP TABLE--", "<script>", "container&provider=x"} {
+				resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type="+malicious, "")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(SatisfyAny(
+					Equal(http.StatusOK),
+					Equal(http.StatusBadRequest),
+				), "special chars %q should not cause a 500", malicious)
+
+				if resp.StatusCode == http.StatusOK {
+					var body map[string]interface{}
+					decodeJSON(resp, &body)
+					Expect(body).To(HaveKey("instances"))
+					instances, _ := body["instances"].([]interface{})
+					Expect(instances).To(BeEmpty(),
+						"special chars %q should not match any real instances", malicious)
+				} else {
+					resp.Body.Close()
+				}
+			}
+		})
+
+		It("handles duplicate service_type query parameters", func() {
+			resp, err := doRequest(http.MethodGet,
+				"/service-type-instances?service_type=container&service_type=vm", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(SatisfyAny(
+				Equal(http.StatusOK),
+				Equal(http.StatusBadRequest),
+			), "duplicate service_type params should not cause a 500")
+
+			if resp.StatusCode == http.StatusOK {
+				var body map[string]interface{}
+				decodeJSON(resp, &body)
+				Expect(body).To(HaveKey("instances"))
+			} else {
+				resp.Body.Close()
+			}
+		})
+
+		It("returns empty for contradictory service_type and provider combination", func() {
+			resp, err := doRequest(http.MethodGet, "/providers?type=container", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var provBody map[string]interface{}
+			decodeJSON(resp, &provBody)
+			providers, _ := provBody["providers"].([]interface{})
+			Expect(providers).NotTo(BeEmpty())
+
+			containerProvider, _ := providers[0].(map[string]interface{})["name"].(string)
+
+			resp, err = doRequest(http.MethodGet,
+				"/service-type-instances?service_type=vm&provider="+containerProvider, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var body map[string]interface{}
+			decodeJSON(resp, &body)
+			Expect(body).To(HaveKey("instances"))
+
+			instances, _ := body["instances"].([]interface{})
+			Expect(instances).To(BeEmpty(),
+				"contradictory service_type=vm with a container provider should yield empty results")
+		})
+
+		It("does not trim whitespace from service_type value", func() {
+			for _, padded := range []string{" container", "container ", " container "} {
+				resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type="+padded, "")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(SatisfyAny(
+					Equal(http.StatusOK),
+					Equal(http.StatusBadRequest),
+				), "whitespace-padded value %q should not cause a 500", padded)
+
+				if resp.StatusCode == http.StatusOK {
+					var body map[string]interface{}
+					decodeJSON(resp, &body)
+					Expect(body).To(HaveKey("instances"))
+					instances, _ := body["instances"].([]interface{})
+					Expect(instances).To(BeEmpty(),
+						"whitespace-padded %q should not match 'container' (no trimming)", padded)
+				} else {
+					resp.Body.Close()
+				}
+			}
+		})
+
+		It("treats all-whitespace service_type as no filter", func() {
+			resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type=%20%20%20", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var filtered map[string]interface{}
+			decodeJSON(resp, &filtered)
+			filteredInstances, _ := filtered["instances"].([]interface{})
+
+			resp2, err := doRequest(http.MethodGet, "/service-type-instances", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp2.StatusCode).To(Equal(http.StatusOK))
+
+			var unfiltered map[string]interface{}
+			decodeJSON(resp2, &unfiltered)
+			unfilteredInstances, _ := unfiltered["instances"].([]interface{})
+
+			Expect(len(filteredInstances)).To(Equal(len(unfilteredInstances)),
+				"all-whitespace service_type should be equivalent to no filter")
+		})
+
+		It("handles very long service_type value", func() {
+			longValue := ""
+			for i := 0; i < 300; i++ {
+				longValue += "a"
+			}
+			resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type="+longValue, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(SatisfyAny(
+				Equal(http.StatusOK),
+				Equal(http.StatusBadRequest),
+				Equal(http.StatusRequestURITooLong),
+			), "very long service_type should not cause a 500")
+
+			if resp.StatusCode == http.StatusOK {
+				var body map[string]interface{}
+				decodeJSON(resp, &body)
+				Expect(body).To(HaveKey("instances"))
+				instances, _ := body["instances"].([]interface{})
+				Expect(instances).To(BeEmpty(),
+					"a 300-char service_type should match nothing")
+			} else {
+				resp.Body.Close()
+			}
+		})
+	})
+
+	Context("show_deleted combined with service_type filter", func() {
+		BeforeEach(func() {
+			requireContainerSP()
+		})
+
+		It("accepts show_deleted=true alongside service_type filter", func() {
+			resp, err := doRequest(http.MethodGet,
+				"/service-type-instances?service_type=container&show_deleted=true", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var body map[string]interface{}
+			decodeJSON(resp, &body)
+			Expect(body).To(HaveKey("instances"))
+
+			instances, ok := body["instances"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(len(instances)).To(BeNumerically(">=", 0),
+				"response should be a valid list")
+		})
+
+		It("returns consistent results for active instances regardless of show_deleted", func() {
+			resp1, err := doRequest(http.MethodGet,
+				"/service-type-instances?service_type=container&show_deleted=false", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp1.StatusCode).To(Equal(http.StatusOK))
+
+			var body1 map[string]interface{}
+			decodeJSON(resp1, &body1)
+			withoutDeleted, _ := body1["instances"].([]interface{})
+
+			resp2, err := doRequest(http.MethodGet,
+				"/service-type-instances?service_type=container&show_deleted=true", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp2.StatusCode).To(Equal(http.StatusOK))
+
+			var body2 map[string]interface{}
+			decodeJSON(resp2, &body2)
+			withDeleted, _ := body2["instances"].([]interface{})
+
+			Expect(len(withDeleted)).To(BeNumerically(">=", len(withoutDeleted)),
+				"show_deleted=true should return at least as many results as show_deleted=false")
 		})
 	})
 })
