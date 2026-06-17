@@ -3,10 +3,13 @@
 package e2e_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -575,6 +578,662 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			}
 			Expect(foundCount).To(Equal(instanceCount),
 				"all %d test instances should appear in the list", instanceCount)
+		})
+	})
+
+	Context("consumer resilience: fake instance ID", Ordered, func() {
+		var policyID, catalogItemID, instanceID, resourceID string
+
+		BeforeAll(func() {
+			requireContainerSP()
+
+			By("discovering the container provider")
+			resp, err := doRequest(http.MethodGet, "/providers?type=container", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var provBody map[string]interface{}
+			decodeJSON(resp, &provBody)
+			providers, ok := provBody["providers"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(providers).NotTo(BeEmpty())
+			providerName, _ := providers[0].(map[string]interface{})["name"].(string)
+
+			By("creating a routing policy")
+			polName := uniqueName("e2e-fake-pol")
+			pkgName := fmt.Sprintf("e2e_fake_%d", time.Now().UnixNano()%1000000)
+			polPayload := fmt.Sprintf(`{
+				"display_name": %q,
+				"policy_type": "GLOBAL",
+				"priority": 100,
+				"description": "E2E fake ID test: route to container provider",
+				"rego_code": "package %s\n\nmain := {\"selected_provider\": \"%s\"}"
+			}`, polName, pkgName, providerName)
+
+			resp, err = doRequest(http.MethodPost, "/policies", polPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var polBody map[string]interface{}
+			decodeJSON(resp, &polBody)
+			policyID, _ = polBody["id"].(string)
+			Expect(policyID).NotTo(BeEmpty())
+		})
+
+		AfterAll(func() {
+			if instanceID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-item-instances/"+instanceID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+				Eventually(func() int {
+					r, e := doRequest(http.MethodGet, "/catalog-item-instances/"+instanceID, "")
+					if e != nil {
+						return 0
+					}
+					defer r.Body.Close()
+					return r.StatusCode
+				}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Equal(http.StatusNotFound))
+			}
+			if catalogItemID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-items/"+catalogItemID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+			if policyID != "" {
+				resp, err := doRequest(http.MethodDelete, "/policies/"+policyID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+		})
+
+		It("publishes a status event for a non-existent instance without crashing the consumer", func() {
+			By("connecting to NATS and publishing a fake status event")
+			conn, err := nats.Connect(natsURL, nats.Timeout(5*time.Second))
+			Expect(err).NotTo(HaveOccurred())
+			defer conn.Close()
+
+			fakeID := uuid.New().String()
+			event := map[string]interface{}{
+				"specversion":     "1.0",
+				"id":              uuid.New().String(),
+				"source":          "dcm/providers/e2e-fake-provider",
+				"type":            "dcm.status.updated",
+				"time":            time.Now().Format(time.RFC3339),
+				"datacontenttype": "application/json",
+				"data": map[string]interface{}{
+					"id":        fakeID,
+					"status":    "RUNNING",
+					"message":   "fake status for non-existent instance",
+					"timestamp": time.Now().Format(time.RFC3339),
+				},
+			}
+			payload, err := json.Marshal(event)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = conn.Publish("dcm.container", payload)
+			Expect(err).NotTo(HaveOccurred())
+			conn.Flush()
+
+			By("verifying the SPRM health endpoint is still responsive")
+			Eventually(func() int {
+				r, e := doRequest(http.MethodGet, "/health/providers", "")
+				if e != nil {
+					return 0
+				}
+				defer r.Body.Close()
+				return r.StatusCode
+			}).WithTimeout(10 * time.Second).WithPolling(1 * time.Second).Should(Equal(http.StatusOK),
+				"SPRM should remain healthy after processing event for non-existent instance")
+		})
+
+		It("still processes real status events after the fake one", func() {
+			By("creating a catalog item and instance")
+			catName := uniqueName("e2e-fake-cat")
+			catPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"service_type": "container",
+					"fields": [
+						{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
+						{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
+						{"path": "resources.cpu.min", "editable": false, "default": 1},
+						{"path": "resources.cpu.max", "editable": false, "default": 1},
+						{"path": "resources.memory.min", "editable": false, "default": "128MB"},
+						{"path": "resources.memory.max", "editable": false, "default": "256MB"}
+					]
+				}
+			}`, catName, catName)
+
+			resp, err := doRequest(http.MethodPost, "/catalog-items", catPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var catBody map[string]interface{}
+			decodeJSON(resp, &catBody)
+			catalogItemID, _ = catBody["uid"].(string)
+
+			instName := uniqueName("e2e-fake-inst")
+			instPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"catalog_item_id": %q,
+					"user_values": [
+						{"path": "metadata.name", "value": %q},
+						{"path": "image.reference", "value": "docker.io/library/nginx:alpine"}
+					]
+				}
+			}`, instName, catalogItemID, instName)
+
+			resp, err = doRequest(http.MethodPost, "/catalog-item-instances", instPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var instBody map[string]interface{}
+			decodeJSON(resp, &instBody)
+			instanceID, _ = instBody["uid"].(string)
+			resourceID, _ = instBody["resource_id"].(string)
+			Expect(resourceID).NotTo(BeEmpty())
+
+			By("verifying the real instance still reaches RUNNING")
+			Eventually(func() string {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return ""
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return ""
+				}
+				var body map[string]interface{}
+				decodeJSON(r, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"),
+				"consumer should still process real events after handling a fake instance ID")
+		})
+	})
+
+	Context("consumer resilience: malformed NATS message", Ordered, func() {
+		var policyID, catalogItemID, instanceID, resourceID string
+
+		BeforeAll(func() {
+			requireContainerSP()
+
+			By("discovering the container provider")
+			resp, err := doRequest(http.MethodGet, "/providers?type=container", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var provBody map[string]interface{}
+			decodeJSON(resp, &provBody)
+			providers, ok := provBody["providers"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(providers).NotTo(BeEmpty())
+			providerName, _ := providers[0].(map[string]interface{})["name"].(string)
+
+			By("creating a routing policy")
+			polName := uniqueName("e2e-malform-pol")
+			pkgName := fmt.Sprintf("e2e_malform_%d", time.Now().UnixNano()%1000000)
+			polPayload := fmt.Sprintf(`{
+				"display_name": %q,
+				"policy_type": "GLOBAL",
+				"priority": 100,
+				"description": "E2E malformed msg test: route to container provider",
+				"rego_code": "package %s\n\nmain := {\"selected_provider\": \"%s\"}"
+			}`, polName, pkgName, providerName)
+
+			resp, err = doRequest(http.MethodPost, "/policies", polPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var polBody map[string]interface{}
+			decodeJSON(resp, &polBody)
+			policyID, _ = polBody["id"].(string)
+			Expect(policyID).NotTo(BeEmpty())
+		})
+
+		AfterAll(func() {
+			if instanceID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-item-instances/"+instanceID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+				Eventually(func() int {
+					r, e := doRequest(http.MethodGet, "/catalog-item-instances/"+instanceID, "")
+					if e != nil {
+						return 0
+					}
+					defer r.Body.Close()
+					return r.StatusCode
+				}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Equal(http.StatusNotFound))
+			}
+			if catalogItemID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-items/"+catalogItemID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+			if policyID != "" {
+				resp, err := doRequest(http.MethodDelete, "/policies/"+policyID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+		})
+
+		It("publishes malformed data without crashing the consumer", func() {
+			By("connecting to NATS and publishing various malformed messages")
+			conn, err := nats.Connect(natsURL, nats.Timeout(5*time.Second))
+			Expect(err).NotTo(HaveOccurred())
+			defer conn.Close()
+
+			malformedPayloads := []struct {
+				desc string
+				data []byte
+			}{
+				{"empty bytes", []byte{}},
+				{"invalid JSON", []byte("this is not json at all!!!")},
+				{"valid JSON but not a CloudEvent", []byte(`{"foo": "bar"}`)},
+				{"CloudEvent with empty data", []byte(`{"specversion":"1.0","id":"test","source":"test","type":"test","data":null}`)},
+				{"CloudEvent with non-object data", []byte(`{"specversion":"1.0","id":"test","source":"test","type":"test","data":"just a string"}`)},
+				{"CloudEvent with missing id in payload", []byte(`{"specversion":"1.0","id":"test","source":"test","type":"test","datacontenttype":"application/json","data":{"status":"RUNNING","message":"no id field"}}`)},
+			}
+
+			for _, m := range malformedPayloads {
+				err = conn.Publish("dcm.container", m.data)
+				Expect(err).NotTo(HaveOccurred(), "failed to publish %s", m.desc)
+			}
+			conn.Flush()
+
+			By("verifying the SPRM health endpoint is still responsive after all malformed messages")
+			time.Sleep(2 * time.Second)
+			resp, err := doRequest(http.MethodGet, "/health/providers", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK),
+				"SPRM should remain healthy after processing malformed NATS messages")
+		})
+
+		It("still processes real status events after malformed ones", func() {
+			By("creating a catalog item and instance")
+			catName := uniqueName("e2e-malform-cat")
+			catPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"service_type": "container",
+					"fields": [
+						{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
+						{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
+						{"path": "resources.cpu.min", "editable": false, "default": 1},
+						{"path": "resources.cpu.max", "editable": false, "default": 1},
+						{"path": "resources.memory.min", "editable": false, "default": "128MB"},
+						{"path": "resources.memory.max", "editable": false, "default": "256MB"}
+					]
+				}
+			}`, catName, catName)
+
+			resp, err := doRequest(http.MethodPost, "/catalog-items", catPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var catBody map[string]interface{}
+			decodeJSON(resp, &catBody)
+			catalogItemID, _ = catBody["uid"].(string)
+
+			instName := uniqueName("e2e-malform-inst")
+			instPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"catalog_item_id": %q,
+					"user_values": [
+						{"path": "metadata.name", "value": %q},
+						{"path": "image.reference", "value": "docker.io/library/nginx:alpine"}
+					]
+				}
+			}`, instName, catalogItemID, instName)
+
+			resp, err = doRequest(http.MethodPost, "/catalog-item-instances", instPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var instBody map[string]interface{}
+			decodeJSON(resp, &instBody)
+			instanceID, _ = instBody["uid"].(string)
+			resourceID, _ = instBody["resource_id"].(string)
+			Expect(resourceID).NotTo(BeEmpty())
+
+			By("verifying the real instance still reaches RUNNING")
+			Eventually(func() string {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return ""
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return ""
+				}
+				var body map[string]interface{}
+				decodeJSON(r, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"),
+				"consumer should recover from malformed messages and process real events")
+		})
+	})
+
+	Context("status stability after reaching RUNNING", Ordered, func() {
+		var policyID, catalogItemID, instanceID, resourceID string
+
+		BeforeAll(func() {
+			requireContainerSP()
+
+			By("discovering the container provider")
+			resp, err := doRequest(http.MethodGet, "/providers?type=container", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var provBody map[string]interface{}
+			decodeJSON(resp, &provBody)
+			providers, ok := provBody["providers"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(providers).NotTo(BeEmpty())
+			providerName, _ := providers[0].(map[string]interface{})["name"].(string)
+
+			By("creating a routing policy")
+			polName := uniqueName("e2e-stable-pol")
+			pkgName := fmt.Sprintf("e2e_stable_%d", time.Now().UnixNano()%1000000)
+			polPayload := fmt.Sprintf(`{
+				"display_name": %q,
+				"policy_type": "GLOBAL",
+				"priority": 100,
+				"description": "E2E stability test: route to container provider",
+				"rego_code": "package %s\n\nmain := {\"selected_provider\": \"%s\"}"
+			}`, polName, pkgName, providerName)
+
+			resp, err = doRequest(http.MethodPost, "/policies", polPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var polBody map[string]interface{}
+			decodeJSON(resp, &polBody)
+			policyID, _ = polBody["id"].(string)
+			Expect(policyID).NotTo(BeEmpty())
+
+			By("creating a catalog item and instance")
+			catName := uniqueName("e2e-stable")
+			catPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"service_type": "container",
+					"fields": [
+						{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
+						{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
+						{"path": "resources.cpu.min", "editable": false, "default": 1},
+						{"path": "resources.cpu.max", "editable": false, "default": 1},
+						{"path": "resources.memory.min", "editable": false, "default": "128MB"},
+						{"path": "resources.memory.max", "editable": false, "default": "256MB"}
+					]
+				}
+			}`, catName, catName)
+
+			resp, err = doRequest(http.MethodPost, "/catalog-items", catPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var catBody map[string]interface{}
+			decodeJSON(resp, &catBody)
+			catalogItemID, _ = catBody["uid"].(string)
+
+			instName := uniqueName("e2e-stable-inst")
+			instPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"catalog_item_id": %q,
+					"user_values": [
+						{"path": "metadata.name", "value": %q},
+						{"path": "image.reference", "value": "docker.io/library/nginx:alpine"}
+					]
+				}
+			}`, instName, catalogItemID, instName)
+
+			resp, err = doRequest(http.MethodPost, "/catalog-item-instances", instPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var instBody map[string]interface{}
+			decodeJSON(resp, &instBody)
+			instanceID, _ = instBody["uid"].(string)
+			resourceID, _ = instBody["resource_id"].(string)
+			Expect(resourceID).NotTo(BeEmpty())
+
+			By("waiting for RUNNING before stability check")
+			Eventually(func() string {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return ""
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return ""
+				}
+				var body map[string]interface{}
+				decodeJSON(r, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"))
+		})
+
+		AfterAll(func() {
+			if instanceID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-item-instances/"+instanceID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+				Eventually(func() int {
+					r, e := doRequest(http.MethodGet, "/catalog-item-instances/"+instanceID, "")
+					if e != nil {
+						return 0
+					}
+					defer r.Body.Close()
+					return r.StatusCode
+				}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Equal(http.StatusNotFound))
+			}
+			if catalogItemID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-items/"+catalogItemID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+			if policyID != "" {
+				resp, err := doRequest(http.MethodDelete, "/policies/"+policyID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+		})
+
+		It("does not regress from RUNNING without external cause", func() {
+			Consistently(func() string {
+				resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if err != nil {
+					return "error"
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					return "error"
+				}
+				var body map[string]interface{}
+				decodeJSON(resp, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(15 * time.Second).WithPolling(2 * time.Second).Should(Equal("RUNNING"),
+				"status should remain RUNNING without any disruption")
+		})
+	})
+
+	Context("deleted instance returns 404", Ordered, func() {
+		var policyID, catalogItemID, instanceID, resourceID string
+
+		BeforeAll(func() {
+			requireContainerSP()
+
+			By("discovering the container provider")
+			resp, err := doRequest(http.MethodGet, "/providers?type=container", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var provBody map[string]interface{}
+			decodeJSON(resp, &provBody)
+			providers, ok := provBody["providers"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(providers).NotTo(BeEmpty())
+			providerName, _ := providers[0].(map[string]interface{})["name"].(string)
+
+			By("creating a routing policy")
+			polName := uniqueName("e2e-del-pol")
+			pkgName := fmt.Sprintf("e2e_del_%d", time.Now().UnixNano()%1000000)
+			polPayload := fmt.Sprintf(`{
+				"display_name": %q,
+				"policy_type": "GLOBAL",
+				"priority": 100,
+				"description": "E2E deletion test: route to container provider",
+				"rego_code": "package %s\n\nmain := {\"selected_provider\": \"%s\"}"
+			}`, polName, pkgName, providerName)
+
+			resp, err = doRequest(http.MethodPost, "/policies", polPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var polBody map[string]interface{}
+			decodeJSON(resp, &polBody)
+			policyID, _ = polBody["id"].(string)
+			Expect(policyID).NotTo(BeEmpty())
+
+			By("creating a catalog item and instance")
+			catName := uniqueName("e2e-del")
+			catPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"service_type": "container",
+					"fields": [
+						{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
+						{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
+						{"path": "resources.cpu.min", "editable": false, "default": 1},
+						{"path": "resources.cpu.max", "editable": false, "default": 1},
+						{"path": "resources.memory.min", "editable": false, "default": "128MB"},
+						{"path": "resources.memory.max", "editable": false, "default": "256MB"}
+					]
+				}
+			}`, catName, catName)
+
+			resp, err = doRequest(http.MethodPost, "/catalog-items", catPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var catBody map[string]interface{}
+			decodeJSON(resp, &catBody)
+			catalogItemID, _ = catBody["uid"].(string)
+
+			instName := uniqueName("e2e-del-inst")
+			instPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"catalog_item_id": %q,
+					"user_values": [
+						{"path": "metadata.name", "value": %q},
+						{"path": "image.reference", "value": "docker.io/library/nginx:alpine"}
+					]
+				}
+			}`, instName, catalogItemID, instName)
+
+			resp, err = doRequest(http.MethodPost, "/catalog-item-instances", instPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var instBody map[string]interface{}
+			decodeJSON(resp, &instBody)
+			instanceID, _ = instBody["uid"].(string)
+			resourceID, _ = instBody["resource_id"].(string)
+			Expect(resourceID).NotTo(BeEmpty())
+
+			By("waiting for RUNNING before deletion")
+			Eventually(func() string {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return ""
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return ""
+				}
+				var body map[string]interface{}
+				decodeJSON(r, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"))
+		})
+
+		AfterAll(func() {
+			if catalogItemID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-items/"+catalogItemID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+			if policyID != "" {
+				resp, err := doRequest(http.MethodDelete, "/policies/"+policyID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+		})
+
+		It("returns 404 after the instance is deleted", func() {
+			By("deleting the catalog-item-instance")
+			resp, err := doRequest(http.MethodDelete, "/catalog-item-instances/"+instanceID, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(SatisfyAny(Equal(http.StatusOK), Equal(http.StatusNoContent), Equal(http.StatusAccepted)))
+			resp.Body.Close()
+
+			By("waiting for the service-type-instance to become 404")
+			Eventually(func() int {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return 0
+				}
+				defer r.Body.Close()
+				return r.StatusCode
+			}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Equal(http.StatusNotFound),
+				"service-type-instance should return 404 after deletion — no ghost status records")
+			instanceID = ""
+		})
+
+		It("does not appear in list results after deletion", func() {
+			resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type=container", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var body map[string]interface{}
+			decodeJSON(resp, &body)
+			instances, ok := body["instances"].([]interface{})
+			Expect(ok).To(BeTrue())
+
+			for _, inst := range instances {
+				i, ok := inst.(map[string]interface{})
+				Expect(ok).To(BeTrue())
+				Expect(i["id"]).NotTo(Equal(resourceID),
+					"deleted instance should not appear in list results")
+			}
 		})
 	})
 })
