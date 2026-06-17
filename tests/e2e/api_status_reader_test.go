@@ -30,7 +30,7 @@ import (
 var _ = Describe("Status Reader", Label("nats"), func() {
 	Context("status propagation through gateway API", Ordered, func() {
 		var containerProviderName string
-		var catalogItemID, instanceID, resourceID string
+		var policyID, catalogItemID, instanceID, resourceID string
 
 		BeforeAll(func() {
 			requireContainerSP()
@@ -49,6 +49,26 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			p := providers[0].(map[string]interface{})
 			containerProviderName, _ = p["name"].(string)
 			Expect(containerProviderName).NotTo(BeEmpty())
+
+			By("creating a routing policy to direct traffic to the container provider")
+			polName := uniqueName("e2e-status-pol")
+			pkgName := fmt.Sprintf("e2e_status_%d", time.Now().UnixNano()%1000000)
+			polPayload := fmt.Sprintf(`{
+				"display_name": %q,
+				"policy_type": "GLOBAL",
+				"priority": 100,
+				"description": "E2E status reader test: route to container provider",
+				"rego_code": "package %s\n\nmain := {\"selected_provider\": \"%s\"}"
+			}`, polName, pkgName, containerProviderName)
+
+			resp, err = doRequest(http.MethodPost, "/policies", polPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var polBody map[string]interface{}
+			decodeJSON(resp, &polBody)
+			policyID, _ = polBody["id"].(string)
+			Expect(policyID).NotTo(BeEmpty())
 
 			By("creating a catalog item")
 			catName := uniqueName("e2e-status")
@@ -121,6 +141,12 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			}
 			if catalogItemID != "" {
 				resp, err := doRequest(http.MethodDelete, "/catalog-items/"+catalogItemID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+			if policyID != "" {
+				resp, err := doRequest(http.MethodDelete, "/policies/"+policyID, "")
 				if err == nil && resp != nil {
 					resp.Body.Close()
 				}
@@ -212,10 +238,42 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 	})
 
 	Context("error status propagation", Ordered, func() {
-		var catalogItemID, instanceID, resourceID string
+		var policyID, catalogItemID, instanceID, resourceID string
 
 		BeforeAll(func() {
 			requireContainerSP()
+
+			By("discovering the container provider for policy creation")
+			resp, err := doRequest(http.MethodGet, "/providers?type=container", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var provBody map[string]interface{}
+			decodeJSON(resp, &provBody)
+			providers, ok := provBody["providers"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(providers).NotTo(BeEmpty())
+			providerName, _ := providers[0].(map[string]interface{})["name"].(string)
+
+			By("creating a routing policy")
+			polName := uniqueName("e2e-badimg-pol")
+			pkgName := fmt.Sprintf("e2e_badimg_%d", time.Now().UnixNano()%1000000)
+			polPayload := fmt.Sprintf(`{
+				"display_name": %q,
+				"policy_type": "GLOBAL",
+				"priority": 100,
+				"description": "E2E bad image test: route to container provider",
+				"rego_code": "package %s\n\nmain := {\"selected_provider\": \"%s\"}"
+			}`, polName, pkgName, providerName)
+
+			resp, err = doRequest(http.MethodPost, "/policies", polPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var polBody map[string]interface{}
+			decodeJSON(resp, &polBody)
+			policyID, _ = polBody["id"].(string)
+			Expect(policyID).NotTo(BeEmpty())
 
 			By("creating a catalog item with a bad image that will fail to pull")
 			catName := uniqueName("e2e-badimg")
@@ -236,7 +294,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				}
 			}`, catName, catName, badImage)
 
-			resp, err := doRequest(http.MethodPost, "/catalog-items", catPayload)
+			resp, err = doRequest(http.MethodPost, "/catalog-items", catPayload)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
 
@@ -293,6 +351,12 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 					resp.Body.Close()
 				}
 			}
+			if policyID != "" {
+				resp, err := doRequest(http.MethodDelete, "/policies/"+policyID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
 		})
 
 		It("reflects PENDING status for a failing container", func() {
@@ -333,7 +397,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 	})
 
 	Context("independent status updates for concurrent instances", Ordered, func() {
-		var catalogItemID string
+		var policyID, catalogItemID string
 		var instanceIDs []string
 		var resourceIDs []string
 
@@ -341,6 +405,38 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 
 		BeforeAll(func() {
 			requireContainerSP()
+
+			By("discovering the container provider")
+			resp, err := doRequest(http.MethodGet, "/providers?type=container", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var provBody map[string]interface{}
+			decodeJSON(resp, &provBody)
+			providers, ok := provBody["providers"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(providers).NotTo(BeEmpty())
+			providerName, _ := providers[0].(map[string]interface{})["name"].(string)
+
+			By("creating a routing policy")
+			polName := uniqueName("e2e-multi-pol")
+			pkgName := fmt.Sprintf("e2e_multi_%d", time.Now().UnixNano()%1000000)
+			polPayload := fmt.Sprintf(`{
+				"display_name": %q,
+				"policy_type": "GLOBAL",
+				"priority": 100,
+				"description": "E2E multi-instance test: route to container provider",
+				"rego_code": "package %s\n\nmain := {\"selected_provider\": \"%s\"}"
+			}`, polName, pkgName, providerName)
+
+			resp, err = doRequest(http.MethodPost, "/policies", polPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var polBody map[string]interface{}
+			decodeJSON(resp, &polBody)
+			policyID, _ = polBody["id"].(string)
+			Expect(policyID).NotTo(BeEmpty())
 
 			By("creating a shared catalog item")
 			catName := uniqueName("e2e-multi")
@@ -360,7 +456,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				}
 			}`, catName, catName)
 
-			resp, err := doRequest(http.MethodPost, "/catalog-items", catPayload)
+			resp, err = doRequest(http.MethodPost, "/catalog-items", catPayload)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
 
@@ -419,6 +515,12 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			}
 			if catalogItemID != "" {
 				resp, err := doRequest(http.MethodDelete, "/catalog-items/"+catalogItemID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+			if policyID != "" {
+				resp, err := doRequest(http.MethodDelete, "/policies/"+policyID, "")
 				if err == nil && resp != nil {
 					resp.Body.Close()
 				}
