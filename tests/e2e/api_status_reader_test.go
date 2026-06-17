@@ -159,6 +159,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 		It("has a status field immediately after creation", func() {
 			resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
 			var body map[string]interface{}
@@ -192,6 +193,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 		It("returns status in the list endpoint", func() {
 			resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type=container", "")
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
 			var body map[string]interface{}
@@ -218,6 +220,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			for i := 0; i < 3; i++ {
 				resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
 				Expect(err).NotTo(HaveOccurred())
+				defer resp.Body.Close()
 				Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
 				var body map[string]interface{}
@@ -230,6 +233,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 		It("includes update_time reflecting the status change", func() {
 			resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
 			var body map[string]interface{}
@@ -553,6 +557,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 		It("all instances show RUNNING simultaneously in list", func() {
 			resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type=container", "")
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
 			var body map[string]interface{}
@@ -710,6 +715,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 
 			resp, err := doRequest(http.MethodPost, "/catalog-items", catPayload)
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
 
 			var catBody map[string]interface{}
@@ -731,6 +737,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 
 			resp, err = doRequest(http.MethodPost, "/catalog-item-instances", instPayload)
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
 
 			var instBody map[string]interface{}
@@ -883,6 +890,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 
 			resp, err := doRequest(http.MethodPost, "/catalog-items", catPayload)
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
 
 			var catBody map[string]interface{}
@@ -904,6 +912,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 
 			resp, err = doRequest(http.MethodPost, "/catalog-item-instances", instPayload)
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
 
 			var instBody map[string]interface{}
@@ -1085,6 +1094,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 
 	Context("deleted instance returns 404", Ordered, func() {
 		var policyID, catalogItemID, instanceID, resourceID string
+		var instanceDeleted bool
 
 		BeforeAll(func() {
 			requireContainerSP()
@@ -1188,6 +1198,12 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 		})
 
 		AfterAll(func() {
+			if !instanceDeleted && instanceID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-item-instances/"+instanceID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
 			if catalogItemID != "" {
 				resp, err := doRequest(http.MethodDelete, "/catalog-items/"+catalogItemID, "")
 				if err == nil && resp != nil {
@@ -1219,12 +1235,13 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				return r.StatusCode
 			}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Equal(http.StatusNotFound),
 				"service-type-instance should return 404 after deletion — no ghost status records")
-			instanceID = ""
+			instanceDeleted = true
 		})
 
 		It("does not appear in list results after deletion", func() {
 			resp, err := doRequest(http.MethodGet, "/service-type-instances?service_type=container", "")
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
 			var body map[string]interface{}
