@@ -1236,4 +1236,311 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			}
 		})
 	})
+
+	Context("consumer edge cases: status value handling", Ordered, func() {
+		var policyID, catalogItemID, instanceID, resourceID string
+
+		BeforeAll(func() {
+			requireContainerSP()
+
+			By("discovering the container provider")
+			resp, err := doRequest(http.MethodGet, "/providers?type=container", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var provBody map[string]interface{}
+			decodeJSON(resp, &provBody)
+			providers, ok := provBody["providers"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(providers).NotTo(BeEmpty())
+			providerName, _ := providers[0].(map[string]interface{})["name"].(string)
+
+			By("creating a routing policy")
+			polName := uniqueName("e2e-edge-pol")
+			pkgName := fmt.Sprintf("e2e_edge_%d", time.Now().UnixNano()%1000000)
+			polPayload := fmt.Sprintf(`{
+				"display_name": %q,
+				"policy_type": "GLOBAL",
+				"priority": 100,
+				"description": "E2E edge case test: route to container provider",
+				"rego_code": "package %s\n\nmain := {\"selected_provider\": \"%s\"}"
+			}`, polName, pkgName, providerName)
+
+			resp, err = doRequest(http.MethodPost, "/policies", polPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var polBody map[string]interface{}
+			decodeJSON(resp, &polBody)
+			policyID, _ = polBody["id"].(string)
+			Expect(policyID).NotTo(BeEmpty())
+
+			By("creating a catalog item and instance")
+			catName := uniqueName("e2e-edge")
+			catPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"service_type": "container",
+					"fields": [
+						{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
+						{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
+						{"path": "resources.cpu.min", "editable": false, "default": 1},
+						{"path": "resources.cpu.max", "editable": false, "default": 1},
+						{"path": "resources.memory.min", "editable": false, "default": "128MB"},
+						{"path": "resources.memory.max", "editable": false, "default": "256MB"}
+					]
+				}
+			}`, catName, catName)
+
+			resp, err = doRequest(http.MethodPost, "/catalog-items", catPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var catBody map[string]interface{}
+			decodeJSON(resp, &catBody)
+			catalogItemID, _ = catBody["uid"].(string)
+
+			instName := uniqueName("e2e-edge-inst")
+			instPayload := fmt.Sprintf(`{
+				"api_version": "v1alpha1",
+				"display_name": %q,
+				"spec": {
+					"catalog_item_id": %q,
+					"user_values": [
+						{"path": "metadata.name", "value": %q},
+						{"path": "image.reference", "value": "docker.io/library/nginx:alpine"}
+					]
+				}
+			}`, instName, catalogItemID, instName)
+
+			resp, err = doRequest(http.MethodPost, "/catalog-item-instances", instPayload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
+
+			var instBody map[string]interface{}
+			decodeJSON(resp, &instBody)
+			instanceID, _ = instBody["uid"].(string)
+			resourceID, _ = instBody["resource_id"].(string)
+			Expect(resourceID).NotTo(BeEmpty())
+
+			By("waiting for RUNNING before edge case tests")
+			Eventually(func() string {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return ""
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return ""
+				}
+				var body map[string]interface{}
+				decodeJSON(r, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"))
+		})
+
+		AfterAll(func() {
+			if instanceID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-item-instances/"+instanceID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+				Eventually(func() int {
+					r, e := doRequest(http.MethodGet, "/catalog-item-instances/"+instanceID, "")
+					if e != nil {
+						return 0
+					}
+					defer r.Body.Close()
+					return r.StatusCode
+				}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Equal(http.StatusNotFound))
+			}
+			if catalogItemID != "" {
+				resp, err := doRequest(http.MethodDelete, "/catalog-items/"+catalogItemID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+			if policyID != "" {
+				resp, err := doRequest(http.MethodDelete, "/policies/"+policyID, "")
+				if err == nil && resp != nil {
+					resp.Body.Close()
+				}
+			}
+		})
+
+		It("passes through arbitrary status values to the API", func() {
+			By("publishing a CloudEvent with a custom status value")
+			conn, err := nats.Connect(natsURL, nats.Timeout(5*time.Second))
+			Expect(err).NotTo(HaveOccurred())
+			defer conn.Close()
+
+			customStatus := "CUSTOM_STATE_12345"
+			event := map[string]interface{}{
+				"specversion":     "1.0",
+				"id":              uuid.New().String(),
+				"source":          "dcm/providers/e2e-test",
+				"type":            "dcm.status.updated",
+				"time":            time.Now().Format(time.RFC3339),
+				"datacontenttype": "application/json",
+				"data": map[string]interface{}{
+					"id":        resourceID,
+					"status":    customStatus,
+					"message":   "testing arbitrary status pass-through",
+					"timestamp": time.Now().Format(time.RFC3339),
+				},
+			}
+			payload, err := json.Marshal(event)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = conn.Publish("dcm.container", payload)
+			Expect(err).NotTo(HaveOccurred())
+			conn.Flush()
+
+			By("verifying the API reflects the custom status verbatim")
+			Eventually(func() string {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return ""
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return ""
+				}
+				var body map[string]interface{}
+				decodeJSON(r, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(10 * time.Second).WithPolling(1 * time.Second).Should(Equal(customStatus),
+				"consumer should store arbitrary status values without validation")
+		})
+
+		It("reflects last-write-wins when multiple status events arrive", func() {
+			By("publishing RUNNING then immediately PENDING")
+			conn, err := nats.Connect(natsURL, nats.Timeout(5*time.Second))
+			Expect(err).NotTo(HaveOccurred())
+			defer conn.Close()
+
+			for _, status := range []string{"RUNNING", "PENDING"} {
+				event := map[string]interface{}{
+					"specversion":     "1.0",
+					"id":              uuid.New().String(),
+					"source":          "dcm/providers/e2e-test",
+					"type":            "dcm.status.updated",
+					"time":            time.Now().Format(time.RFC3339),
+					"datacontenttype": "application/json",
+					"data": map[string]interface{}{
+						"id":        resourceID,
+						"status":    status,
+						"message":   fmt.Sprintf("last-write-wins test: %s", status),
+						"timestamp": time.Now().Format(time.RFC3339),
+					},
+				}
+				payload, err := json.Marshal(event)
+				Expect(err).NotTo(HaveOccurred())
+				err = conn.Publish("dcm.container", payload)
+				Expect(err).NotTo(HaveOccurred())
+			}
+			conn.Flush()
+
+			By("verifying the API shows PENDING (the last published event)")
+			Eventually(func() string {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return ""
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return ""
+				}
+				var body map[string]interface{}
+				decodeJSON(r, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(10 * time.Second).WithPolling(1 * time.Second).Should(Equal("PENDING"),
+				"consumer should apply last-write-wins — no forward-only constraint on status")
+		})
+
+		It("preserves existing status when an event has an empty status string", func() {
+			By("first setting status to a known value")
+			conn, err := nats.Connect(natsURL, nats.Timeout(5*time.Second))
+			Expect(err).NotTo(HaveOccurred())
+			defer conn.Close()
+
+			knownStatus := "KNOWN_STATE"
+			event := map[string]interface{}{
+				"specversion":     "1.0",
+				"id":              uuid.New().String(),
+				"source":          "dcm/providers/e2e-test",
+				"type":            "dcm.status.updated",
+				"time":            time.Now().Format(time.RFC3339),
+				"datacontenttype": "application/json",
+				"data": map[string]interface{}{
+					"id":        resourceID,
+					"status":    knownStatus,
+					"message":   "setting known state",
+					"timestamp": time.Now().Format(time.RFC3339),
+				},
+			}
+			payload, err := json.Marshal(event)
+			Expect(err).NotTo(HaveOccurred())
+			err = conn.Publish("dcm.container", payload)
+			Expect(err).NotTo(HaveOccurred())
+			conn.Flush()
+
+			Eventually(func() string {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return ""
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return ""
+				}
+				var body map[string]interface{}
+				decodeJSON(r, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(10 * time.Second).WithPolling(1 * time.Second).Should(Equal(knownStatus))
+
+			By("publishing an event with empty status string")
+			emptyEvent := map[string]interface{}{
+				"specversion":     "1.0",
+				"id":              uuid.New().String(),
+				"source":          "dcm/providers/e2e-test",
+				"type":            "dcm.status.updated",
+				"time":            time.Now().Format(time.RFC3339),
+				"datacontenttype": "application/json",
+				"data": map[string]interface{}{
+					"id":        resourceID,
+					"status":    "",
+					"message":   "empty status test",
+					"timestamp": time.Now().Format(time.RFC3339),
+				},
+			}
+			payload, err = json.Marshal(emptyEvent)
+			Expect(err).NotTo(HaveOccurred())
+			err = conn.Publish("dcm.container", payload)
+			Expect(err).NotTo(HaveOccurred())
+			conn.Flush()
+
+			By("verifying the existing status is preserved (GORM skips zero-value fields)")
+			time.Sleep(3 * time.Second)
+			resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			var body map[string]interface{}
+			decodeJSON(resp, &body)
+			Expect(body["status"]).To(Equal(knownStatus),
+				"empty status string should be a no-op due to GORM zero-value skip behavior")
+		})
+	})
+
+	// NOTE: "status update on soft-deleted instance" is not testable via the
+	// gateway API because DELETE /service-type-instances/{id}?deferred=true is
+	// an internal SPRM endpoint not exposed through the gateway. The deferred
+	// deletion flow is triggered internally during rehydration. This scenario
+	// would need to be tested at the unit/integration level within the SPRM repo.
 })
