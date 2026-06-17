@@ -851,10 +851,14 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			conn.Flush()
 
 			By("verifying the SPRM health endpoint is still responsive after all malformed messages")
-			time.Sleep(2 * time.Second)
-			resp, err := doRequest(http.MethodGet, "/health/providers", "")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.StatusCode).To(Equal(http.StatusOK),
+			Eventually(func() int {
+				r, e := doRequest(http.MethodGet, "/health/providers", "")
+				if e != nil {
+					return 0
+				}
+				defer r.Body.Close()
+				return r.StatusCode
+			}).WithTimeout(10 * time.Second).WithPolling(1 * time.Second).Should(Equal(http.StatusOK),
 				"SPRM should remain healthy after processing malformed NATS messages")
 		})
 
@@ -1416,8 +1420,13 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				"consumer should store arbitrary status values without validation")
 		})
 
+		// This tests ordered delivery within a single NATS publisher connection.
+		// NATS guarantees ordering per publisher, so the consumer processes RUNNING
+		// then PENDING sequentially. Cross-publisher concurrent ordering is not
+		// tested here — that would require multiple connections publishing
+		// simultaneously, which introduces non-deterministic delivery order.
 		It("reflects last-write-wins when multiple status events arrive", func() {
-			By("publishing RUNNING then immediately PENDING")
+			By("publishing RUNNING then immediately PENDING (ordered within one publisher)")
 			conn, err := nats.Connect(natsURL, nats.Timeout(5*time.Second))
 			Expect(err).NotTo(HaveOccurred())
 			defer conn.Close()
@@ -1525,15 +1534,21 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			conn.Flush()
 
-			By("verifying the existing status is preserved (GORM skips zero-value fields)")
-			time.Sleep(3 * time.Second)
-			resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.StatusCode).To(Equal(http.StatusOK))
-
-			var body map[string]interface{}
-			decodeJSON(resp, &body)
-			Expect(body["status"]).To(Equal(knownStatus),
+			By("verifying the existing status is consistently preserved (GORM skips zero-value fields)")
+			Consistently(func() string {
+				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+				if e != nil {
+					return ""
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return ""
+				}
+				var body map[string]interface{}
+				decodeJSON(r, &body)
+				s, _ := body["status"].(string)
+				return s
+			}).WithTimeout(5 * time.Second).WithPolling(1 * time.Second).Should(Equal(knownStatus),
 				"empty status string should be a no-op due to GORM zero-value skip behavior")
 		})
 	})
