@@ -13,7 +13,7 @@ readonly DEFAULT_CONTROL_PLANE_REPO="https://github.com/dcm-project/control-plan
 readonly DEFAULT_CONTROL_PLANE_BRANCH="main"
 readonly DEFAULT_CONTROL_PLANE_TMP_DIR="/tmp/dcm-e2e"
 export COMPOSE_PROJECT_NAME="dcm-e2e"
-readonly GATEWAY_PORT="8080"
+readonly CONTROL_PLANE_PORT="8080"
 readonly HEALTH_TIMEOUT_SECONDS=90
 readonly HEALTH_POLL_INTERVAL=5
 
@@ -436,7 +436,7 @@ verify_health() {
 
     info "Polling health endpoints (timeout: ${HEALTH_TIMEOUT_SECONDS}s)..."
 
-    local gateway_url="http://localhost:${GATEWAY_PORT}"
+    local control_plane_url="http://localhost:${CONTROL_PLANE_PORT}"
     local health_failures=()
 
     for endpoint in "${HEALTH_ENDPOINTS[@]}"; do
@@ -445,7 +445,7 @@ verify_health() {
 
         while [[ ${attempt_elapsed} -lt ${HEALTH_TIMEOUT_SECONDS} ]]; do
             local http_code
-            http_code=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" "${gateway_url}${endpoint}" 2>/dev/null || echo "000")
+            http_code=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" "${control_plane_url}${endpoint}" 2>/dev/null || echo "000")
             if [[ "${http_code}" =~ ^2[0-9]{2}$ ]]; then
                 healthy=true
                 break
@@ -1095,7 +1095,7 @@ verify_health "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FIL
 
 get_running_versions "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || info "Version collection failed (non-fatal)"
 
-GATEWAY_URL="http://localhost:${GATEWAY_PORT}"
+GATEWAY_URL="http://localhost:${CONTROL_PLANE_PORT}"
 log "DCM stack is up and healthy at ${GATEWAY_URL}"
 if [[ "${CONTROL_PLANE_TMP_DIR}" != "${DEFAULT_CONTROL_PLANE_TMP_DIR}" ]]; then
     info "To tear down: $(basename "$0") --control-plane-dir ${CONTROL_PLANE_TMP_DIR} --tear-down"
