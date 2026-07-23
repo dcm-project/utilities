@@ -491,14 +491,14 @@ Tests automatically verify prerequisites and skip gracefully if not met:
 
 | Branch | Role |
 |--------|------|
-| `kubevirt-provider-tests-titan90` | Green E2E suite used for day-to-day / CI-style runs |
-| `kubevirt-provider-tests-deferred` | Disruptive tests (`DCM_DISRUPTIVE=1`) and intentionally skipped cases (TC-08, TC-17, TC-28a/b/d/e, TC-02/03/20, etc.) |
+| `kubevirt-provider-tests-titan90` | **Green E2E suite** used for day-to-day / CI-style runs (this branch) |
+| `kubevirt-provider-tests-deferred` | Disruptive tests (`DCM_DISRUPTIVE=1`) and intentionally skipped cases (TC-08, TC-17, TC-28a/b/d/e, TC-02/03/05/20/30, etc.) |
 
-See `tests/e2e/KUBEVIRT_TESTING.md` on each branch for the coverage table. Promote deferred cases by implementing them on `kubevirt-provider-tests-deferred`, then merging into the green branch when they pass without Skip.
+See `tests/e2e/KUBEVIRT_TESTING.md` on each branch for the coverage table. Implement deferred cases on `kubevirt-provider-tests-deferred`, then merge into this branch when they pass without Skip.
 
 ## Success Criteria
 
-- Green-suite TCs pass against a live KubeVirt cluster (`kubevirt-provider-tests-titan90`)
+- Green-suite TCs pass against a live KubeVirt cluster (this branch)
 - Deferred / disruptive TCs tracked on `kubevirt-provider-tests-deferred` until SP or fixture gaps are closed
 - VM creation results in actual VirtualMachine on cluster
 - VM lifecycle (create → running → delete) completes successfully
@@ -506,7 +506,7 @@ See `tests/e2e/KUBEVIRT_TESTING.md` on each branch for the coverage table. Promo
 - DCM end-to-end flow provisions VMs through catalog/policy/placement
 - Concurrent VM creation succeeds without label conflicts
 - NATS events conform to CloudEvent schema and ordering requirements
-- Storage class selection and error handling work correctly
+- Storage class happy-path selection works; error-path SC cases stay on the deferred branch
 - No regression in existing container SP or ACM cluster SP tests
 
 ## Test Case Summary

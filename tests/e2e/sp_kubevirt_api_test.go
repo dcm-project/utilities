@@ -97,10 +97,6 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			Expect(getResp.StatusCode).To(Equal(http.StatusOK))
 		})
 
-		It("create without id query param [TC-08]", func() {
-			Skip("SP panics when id query param is omitted (*request.Params.Id nil deref) — tracked separately")
-		})
-
 		It("returns 409 when creating a VM with a duplicate instance ID [TC-10]", func() {
 			customID := uuid.NewString()
 			spec := newTestVMSpec(uniqueName("e2e-dup"))
@@ -428,31 +424,6 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			}).WithTimeout(90 * time.Second).WithPolling(5 * time.Second).Should(BeNumerically(">=", 0))
 		})
 
-		It("returns an error for a non-existent storage class when provided [TC-33][TC-28a]", func() {
-			// OpenAPI may not expose storageClassName on disks; if the field is
-			// rejected/ignored, skip rather than false-fail.
-			path, id := createVMPath()
-			DeferCleanup(func() { deleteTestVM(id) })
-			payload := fmt.Sprintf(`{
-				"spec": {
-					"service_type": "vm",
-					"metadata": {"name": %q},
-					"guest_os": {"type": "linux"},
-					"vcpu": {"count": 1},
-					"memory": {"size": "1GB"},
-					"storage": {"disks": [{"name": "boot", "capacity": "10GB", "storage_class": "does-not-exist-sc"}]}
-				}
-			}`, uniqueName("e2e-bad-sc"))
-			resp, err := doKubevirtRequest(http.MethodPost, path, payload)
-			Expect(err).NotTo(HaveOccurred())
-			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusCreated {
-				Skip("SP ignores unknown storage_class field; cannot assert error path")
-			}
-			Expect(resp.StatusCode).To(BeNumerically(">=", 400))
-			body, _ := io.ReadAll(resp.Body)
-			GinkgoWriter.Printf("bad storage class response: %s\n", string(body))
-		})
 	})
 
 	Context("External lifecycle", func() {
@@ -524,12 +495,6 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 		})
 	})
 
-	Context("Conversion skip edge case", func() {
-		It("list skips malformed DCM-labeled VMs [TC-17]", func() {
-			Skip("P2: requires applying intentionally broken VirtualMachine YAML and scraping SP logs")
-		})
-	})
-
 	Context("KubeVirt error matrix", func() {
 		It("handles invalid admission / resource combo [TC-28c]", func() {
 			path, id := createVMPath()
@@ -551,18 +516,6 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			// May be OpenAPI 400 or KubeVirt admission 4xx/5xx, or accepted then Failed
 			GinkgoWriter.Printf("tiny memory create status=%d\n", resp.StatusCode)
 			Expect(resp.StatusCode).To(BeNumerically(">=", 200))
-		})
-
-		It("quota exceeded [TC-28b]", func() {
-			Skip("requires a namespace ResourceQuota fixture not present in default e2e env")
-		})
-
-		It("image pull failure status [TC-28d]", func() {
-			Skip("requires containerDisk image override not exposed in minimal OpenAPI VMSpec")
-		})
-
-		It("insufficient capacity [TC-28e]", func() {
-			Skip("requires requesting more CPU than available nodes")
 		})
 	})
 })

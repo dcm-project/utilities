@@ -244,13 +244,6 @@ func kubevirtNamespace() string {
 	return "vms"
 }
 
-// requireDisruptive skips unless DCM_DISRUPTIVE=1.
-func requireDisruptive() {
-	if os.Getenv("DCM_DISRUPTIVE") != "1" {
-		Skip("disruptive test skipped (set DCM_DISRUPTIVE=1 to enable)")
-	}
-}
-
 // expectProblemDetails asserts an RFC 7807-ish problem body (type + title at minimum).
 func expectProblemDetails(resp *http.Response) map[string]interface{} {
 	GinkgoHelper()

@@ -6,10 +6,10 @@ This document describes the E2E test suite for the KubeVirt Service Provider (FL
 
 | Branch | Contents |
 |--------|----------|
-| `kubevirt-provider-tests-titan90` | Default green suite (ready for CI / day-to-day runs) |
-| `kubevirt-provider-tests-deferred` | **This branch** — disruptive + intentionally skipped cases that need fixtures, SP fixes, or `DCM_DISRUPTIVE=1` |
+| `kubevirt-provider-tests-titan90` | **This branch** — default green suite (ready for CI / day-to-day runs) |
+| `kubevirt-provider-tests-deferred` | Disruptive + intentionally skipped cases (`DCM_DISRUPTIVE=1`, SP/fixture gaps) |
 
-Merge or cherry-pick from `kubevirt-provider-tests-deferred` when enabling deferred coverage.
+Deferred coverage (TC-02/03/05/08/17/20/28a/b/d/e, TC-30, bad storage-class error path) lives only on `kubevirt-provider-tests-deferred`. See that branch’s `KUBEVIRT_TESTING.md` for the full deferred table.
 
 ## Overview
 
@@ -17,18 +17,15 @@ The KubeVirt SP test suite validates VM lifecycle management through the DCM pla
 - Direct KubeVirt SP API tests (health, CRUD, validation, labels, concurrency)
 - Full platform integration tests (catalog → policy → placement → VM provisioning → delete)
 - VM status monitoring and NATS event verification
-- Disruptive cases (gated by `DCM_DISRUPTIVE=1`)
-- Deferred Skip stubs for SP gaps and env fixtures (TC-08, TC-17, TC-28b/d/e, bad storage class)
 
 ## Test Files
 
 | File | Purpose | Labels |
 |------|---------|--------|
 | `sp_kubevirt_helpers_test.go` | Helpers, VM builders, cluster/label utilities | — |
-| `sp_kubevirt_api_test.go` | Direct SP API (health, CRUD, validation, concurrency, storage) + deferred Skip stubs | `sp`, `kubevirt` |
+| `sp_kubevirt_api_test.go` | Direct SP API (health, CRUD, validation, concurrency, storage) | `sp`, `kubevirt` |
 | `sp_kubevirt_status_test.go` | NATS status events + GET status | `sp`, `kubevirt`, `nats` |
 | `core_platform_kubevirt_test.go` | Catalog → Running → delete lifecycle | `core`, `platform`, `kubevirt` |
-| `sp_kubevirt_disruptive_test.go` | Unhealthy health, namespace isolation, registration stubs | `sp`, `kubevirt`, `disruptive` |
 
 ## Prerequisites
 
@@ -50,23 +47,16 @@ export KUBERNETES_NAMESPACE=vms
 ./scripts/cleanup-kubevirt-e2e.sh
 
 make test-kubevirt-sp
-
-# Disruptive suite (this branch only)
-DCM_DISRUPTIVE=1 make test-kubevirt-sp
 ```
 
-## Coverage (FLPATH-2897)
+## Coverage (FLPATH-2897) — green suite
 
 | TC | Status | Notes |
 |----|--------|-------|
 | TC-01 | Implemented | Provider `service_type`, `schema_version`, `endpoint` |
-| TC-02 | Skip (disruptive) | Needs SPRM down + SP restart |
-| TC-03 | Skip (disruptive) | Needs invalid registration + log assert |
 | TC-04 | Implemented | Health healthy |
-| TC-05 | Implemented (gated) | `DCM_DISRUPTIVE=1`; poisons SP `/etc/hosts` |
 | TC-06 | Implemented | Create + cluster labels |
 | TC-07 | Implemented | Custom `?id=` |
-| TC-08 | Skip | SP panics without `?id=` |
 | TC-09 | Implemented | Empty/missing/invalid memory |
 | TC-10 | Implemented | Duplicate id → 409 |
 | TC-11 | Implemented | Domain resources present on cluster VM |
@@ -75,10 +65,8 @@ DCM_DISRUPTIVE=1 make test-kubevirt-sp
 | TC-14 | Implemented | GET status phase |
 | TC-15 | Implemented | List contains 3 created VMs |
 | TC-16 | Implemented | Unlabeled cluster VM excluded |
-| TC-17 | Skip (P2) | Malformed VM list skip |
 | TC-18 | Implemented | DELETE + cluster gone |
 | TC-19 | Implemented | DELETE missing |
-| TC-20 | Skip (disruptive) | Needs RBAC revoke |
 | TC-21 | Implemented | Transitions + GET status |
 | TC-22 | Implemented | CloudEvent schema; filter by VM id |
 | TC-23 | Implemented | Catalog → Running + cluster labels |
@@ -86,28 +74,11 @@ DCM_DISRUPTIVE=1 make test-kubevirt-sp
 | TC-25 | Implemented | Malformed JSON / content-type |
 | TC-26 | Implemented | DCM labels on VM + template |
 | TC-27 | Implemented | Instance id label round-trip |
-| TC-28 | Partial | 28c on main path; 28a/b/d/e deferred here |
+| TC-28c | Implemented | Tiny memory / admission path |
 | TC-29 | Implemented | Invalid memory unit |
-| TC-30 | Implemented (gated) | Namespace isolation under disruptive label |
 | TC-31 | Implemented | 5 parallel creates |
 | TC-32 | Implemented | External halt/start via runStrategy |
-| TC-33 | Partial | Happy path on green suite; bad SC error path deferred |
-
-## Deferred / disruptive cases (this branch)
-
-| ID | Test | Blocker |
-|----|------|---------|
-| TC-02 | Registration retry when SPRM down | Disruptive automation |
-| TC-03 | Stop retry on 4xx registration | Invalid payload + log assert |
-| TC-05 | Health unhealthy | `DCM_DISRUPTIVE=1` |
-| TC-08 | Create without `?id=` | SP nil deref panic |
-| TC-17 | List skips malformed VMs | Broken VM YAML + log scrape |
-| TC-20 | Delete when KubeVirt access fails | Temporary RBAC revoke |
-| TC-28a / TC-33 bad SC | Non-existent storage class error | SP ignores `storage_class` |
-| TC-28b | Quota exceeded | ResourceQuota fixture |
-| TC-28d | Image pull failure | containerDisk not in minimal VMSpec |
-| TC-28e | Insufficient capacity | Oversize CPU vs nodes |
-| TC-30 | Namespace isolation | `DCM_DISRUPTIVE=1` |
+| TC-33 | Implemented | Provisions against available StorageClass |
 
 ## Notes
 
@@ -115,3 +86,4 @@ DCM_DISRUPTIVE=1 make test-kubevirt-sp
 - Catalog fields must use `storage.disks` as an array (control-plane nested_map bug with `disks[0]`).
 - STI status casing is `Running` (not `RUNNING`).
 - Cleanup: `./scripts/cleanup-kubevirt-e2e.sh`
+- Disruptive / Skip-stub cases: checkout `kubevirt-provider-tests-deferred`
