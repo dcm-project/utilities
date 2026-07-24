@@ -43,9 +43,6 @@ export DCM_KUBEVIRT_SP_URL=http://localhost:8081/api/v1alpha1
 export DCM_NATS_URL=nats://localhost:4222
 export KUBERNETES_NAMESPACE=vms
 
-# Clean leftovers first
-./scripts/cleanup-kubevirt-e2e.sh
-
 make test-kubevirt-sp
 ```
 
@@ -85,5 +82,5 @@ make test-kubevirt-sp
 - Cluster VMs use `GenerateName: dcm-`; look up by label `dcm.project/dcm-instance-id=<id>`.
 - Catalog fields must use `storage.disks` as an array (control-plane nested_map bug with `disks[0]`).
 - STI status casing is `Running` (not `RUNNING`).
-- Cleanup: `./scripts/cleanup-kubevirt-e2e.sh`
+- Specs clean up via Ginkgo `DeferCleanup` / `deleteTestVM` (no shared leftover-cleaner in-repo).
 - Disruptive / Skip-stub cases: checkout `kubevirt-provider-tests-deferred`
