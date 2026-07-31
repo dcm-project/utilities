@@ -71,11 +71,12 @@ var _ = Describe("Core Platform - KubeVirt Provider", Label("core", "platform", 
 			Expect(p["schema_version"]).To(Equal("v1alpha1"))
 			endpoint, _ := p["endpoint"].(string)
 			Expect(endpoint).To(ContainSubstring("/api/v1alpha1/vms"))
-			// operations may be omitted by current SPRM payload; assert when present
-			if ops, ok := p["operations"]; ok {
-				GinkgoWriter.Printf("provider operations: %#v\n", ops)
-				Expect(ops).NotTo(BeNil())
+			ops, ok := p["operations"]
+			if !ok || ops == nil {
+				Skip("provider operations omitted by SPRM payload — assert when SPRM includes them")
 			}
+			opsNorm := normalizeProviderOperations(ops)
+			Expect(opsNorm).To(ContainElements("CREATE", "DELETE", "READ"))
 
 			GinkgoWriter.Printf("Using KubeVirt provider: %s endpoint=%s\n", kubevirtProviderName, endpoint)
 		})
@@ -139,6 +140,33 @@ var _ = Describe("Core Platform - KubeVirt Provider", Label("core", "platform", 
 			uid, ok := body["uid"].(string)
 			Expect(ok).To(BeTrue())
 			catalogItemID = uid
+
+			getResp, err := doRequest(http.MethodGet, "/catalog-items/"+catalogItemID, "")
+			Expect(err).NotTo(HaveOccurred())
+			defer getResp.Body.Close()
+			Expect(getResp.StatusCode).To(Equal(http.StatusOK))
+			var got map[string]interface{}
+			decodeJSON(getResp, &got)
+			Expect(got["display_name"]).To(Equal(name))
+			spec, ok := got["spec"].(map[string]interface{})
+			Expect(ok).To(BeTrue())
+			resources, ok := spec["resources"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(resources).To(HaveLen(1))
+			res, ok := resources[0].(map[string]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(res["service_type"]).To(Equal("vm"))
+			fields, ok := res["fields"].([]interface{})
+			Expect(ok).To(BeTrue())
+			fieldPaths := map[string]bool{}
+			for _, f := range fields {
+				fm, ok := f.(map[string]interface{})
+				Expect(ok).To(BeTrue())
+				path, _ := fm["path"].(string)
+				fieldPaths[path] = true
+			}
+			Expect(fieldPaths).To(HaveKey("memory.size"))
+			Expect(fieldPaths).To(HaveKey("storage.disks"))
 		})
 
 		It("creates a routing policy for KubeVirt provider", func() {
@@ -165,6 +193,18 @@ var _ = Describe("Core Platform - KubeVirt Provider", Label("core", "platform", 
 			id, ok := body["id"].(string)
 			Expect(ok).To(BeTrue())
 			policyID = id
+
+			getResp, err := doRequest(http.MethodGet, "/policies/"+policyID, "")
+			Expect(err).NotTo(HaveOccurred())
+			defer getResp.Body.Close()
+			Expect(getResp.StatusCode).To(Equal(http.StatusOK))
+			var got map[string]interface{}
+			decodeJSON(getResp, &got)
+			Expect(got["policy_type"]).To(Equal("GLOBAL"))
+			Expect(got["priority"]).To(BeNumerically("==", priority))
+			rego, _ := got["rego_code"].(string)
+			Expect(rego).To(ContainSubstring(kubevirtProviderName))
+			Expect(rego).To(ContainSubstring("selected_provider"))
 		})
 
 		It("creates a catalog item instance for VM [TC-23]", func() {
@@ -196,7 +236,7 @@ var _ = Describe("Core Platform - KubeVirt Provider", Label("core", "platform", 
 			Expect(ok).To(BeTrue())
 			ids, ok := spec["resource_ids"].([]interface{})
 			Expect(ok).To(BeTrue())
-			Expect(ids).NotTo(BeEmpty())
+			Expect(ids).To(HaveLen(1))
 			resourceID, _ = ids[0].(string)
 			Expect(resourceID).NotTo(BeEmpty())
 		})

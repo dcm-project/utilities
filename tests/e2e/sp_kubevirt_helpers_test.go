@@ -254,6 +254,51 @@ func expectProblemDetails(resp *http.Response) map[string]interface{} {
 	return problem
 }
 
+// expectProblemDetailContains asserts problem details and that type/title/detail
+// together contain at least one of the given substrings (case-insensitive).
+func expectProblemDetailContains(resp *http.Response, substrings ...string) map[string]interface{} {
+	GinkgoHelper()
+	problem := expectProblemDetails(resp)
+	blob := strings.ToLower(fmt.Sprintf("%v %v %v", problem["type"], problem["title"], problem["detail"]))
+	matched := false
+	for _, s := range substrings {
+		if strings.Contains(blob, strings.ToLower(s)) {
+			matched = true
+			break
+		}
+	}
+	Expect(matched).To(BeTrue(),
+		"problem details %#v should mention one of %v", problem, substrings)
+	return problem
+}
+
+// normalizeProviderOperations converts SPRM operations (string slice or comma string) to uppercased []string.
+func normalizeProviderOperations(ops interface{}) []string {
+	var raw []string
+	switch v := ops.(type) {
+	case []interface{}:
+		for _, item := range v {
+			raw = append(raw, fmt.Sprint(item))
+		}
+	case []string:
+		raw = append(raw, v...)
+	case string:
+		for _, part := range strings.Split(v, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				raw = append(raw, part)
+			}
+		}
+	default:
+		raw = append(raw, fmt.Sprint(ops))
+	}
+	out := make([]string, 0, len(raw))
+	for _, s := range raw {
+		out = append(out, strings.ToUpper(strings.TrimSpace(s)))
+	}
+	return out
+}
+
 // runKubeCmd tries oc then kubectl with the given args.
 func runKubeCmd(args ...string) (string, error) {
 	cmd := exec.Command("oc", args...)
@@ -390,7 +435,41 @@ func setVMRunStrategy(name, namespace, strategy string) error {
 	return err
 }
 
-// getPVCsForVM lists PVCs in the namespace (best-effort for storage class checks).
+// getPVCsForVM lists PVCs in the namespace correlated to a VirtualMachine name
+// (ownerReference name match or PVC name containing the VM name).
+func getPVCsForVM(vmName, namespace string) ([]map[string]interface{}, error) {
+	all, err := getPVCsInNamespace(namespace)
+	if err != nil {
+		return nil, err
+	}
+	var matched []map[string]interface{}
+	for _, pvc := range all {
+		md, _ := pvc["metadata"].(map[string]interface{})
+		if md == nil {
+			continue
+		}
+		pvcName, _ := md["name"].(string)
+		if strings.Contains(pvcName, vmName) {
+			matched = append(matched, pvc)
+			continue
+		}
+		owners, _ := md["ownerReferences"].([]interface{})
+		for _, o := range owners {
+			om, ok := o.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			ownerName, _ := om["name"].(string)
+			if ownerName == vmName || strings.Contains(ownerName, vmName) {
+				matched = append(matched, pvc)
+				break
+			}
+		}
+	}
+	return matched, nil
+}
+
+// getPVCsInNamespace lists PVCs in the namespace (best-effort for storage class checks).
 func getPVCsInNamespace(namespace string) ([]map[string]interface{}, error) {
 	out, err := runKubeCmd("get", "pvc", "-n", namespace, "-o", "json")
 	if err != nil {

@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -176,22 +177,20 @@ var _ = Describe("KubeVirt SP Status Monitoring", Label("sp", "kubevirt", "nats"
 			}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).
 				ShouldNot(BeEmpty(), "GET /vms/{id} or cluster should expose a status")
 
-			if seenStarted {
-				// If we saw both Pending and Running, Pending should appear first
-				pendingIdx, runningIdx := -1, -1
-				for i, s := range statuses {
-					if pendingIdx < 0 && isPendingPhase(s) {
-						pendingIdx = i
-					}
-					if runningIdx < 0 && isStartedPhase(s) {
-						runningIdx = i
-					}
+			pendingIdx, runningIdx := -1, -1
+			for i, s := range statuses {
+				if pendingIdx < 0 && isPendingPhase(s) {
+					pendingIdx = i
 				}
-				if pendingIdx >= 0 && runningIdx >= 0 {
-					Expect(pendingIdx).To(BeNumerically("<", runningIdx),
-						"Pending should precede Running when both observed: %v", statuses)
+				if runningIdx < 0 && isStartedPhase(s) {
+					runningIdx = i
 				}
 			}
+			if pendingIdx < 0 || runningIdx < 0 {
+				Skip(fmt.Sprintf("did not observe both Pending and started phases (got %v); cannot assert order", statuses))
+			}
+			Expect(pendingIdx).To(BeNumerically("<", runningIdx),
+				"Pending should precede Running when both observed: %v", statuses)
 
 			GinkgoWriter.Printf("Collected transitions: %v (started=%v)\n", statuses, seenStarted)
 		})
