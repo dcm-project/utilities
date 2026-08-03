@@ -75,7 +75,7 @@ make test-kubevirt-sp
 | TC-29 | Implemented | Invalid memory unit |
 | TC-31 | Implemented | 5 parallel creates |
 | TC-32 | Implemented | External halt/start via runStrategy |
-| TC-33 | Implemented | Provisions against available StorageClass |
+| TC-33 | Implemented | Boot disk maps to containerDisk (PVC/SC deferred) |
 
 ## Notes
 

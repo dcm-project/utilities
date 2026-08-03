@@ -70,7 +70,8 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			Expect(resources).NotTo(BeNil())
 			requests, _ := resources["requests"].(map[string]interface{})
 			Expect(requests).To(HaveKey("memory"))
-			Expect(requests["memory"]).To(Equal("1Gi"))
+			// OpenAPI input is 1GB; SP maps decimal GB → Kubernetes resource "1G" (not Gi).
+			Expect(requests["memory"]).To(Equal("1G"))
 
 			GinkgoWriter.Printf("Created VM id=%s clusterName=%s with DCM labels\n", id, clusterName)
 		})
@@ -398,15 +399,15 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 		})
 	})
 
-	Context("Storage class handling", func() {
-		It("provisions against an available storage class [TC-33]", func() {
+	Context("Boot storage mapping", func() {
+		// TC-33: current kubevirt SP maps the OpenAPI boot disk to a containerDisk
+		// (guest OS image), not a PVC/DataVolume. StorageClass / PVC provisioning is
+		// not exposed by the API yet; expand this test when the SP adds PVC-backed disks.
+		It("maps the boot disk to a containerDisk volume [TC-33]", func() {
 			if err := checkClusterAccess(); err != nil {
 				Skip(err.Error())
 			}
-			if err := checkStorageClass(); err != nil {
-				Skip(err.Error())
-			}
-			id, err := createTestVM(uniqueName("e2e-sc"))
+			id, err := createTestVM(uniqueName("e2e-boot-disk"))
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(func() { deleteTestVM(id) })
 
@@ -418,27 +419,39 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 				return err
 			}).WithTimeout(60 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 
-			var pvcs []map[string]interface{}
-			Eventually(func() error {
-				matched, err := getPVCsForVM(clusterName, ns)
-				if err != nil {
-					return err
-				}
-				if len(matched) != 1 {
-					return fmt.Errorf("want 1 boot PVC for VM %s, got %d", clusterName, len(matched))
-				}
-				pvcs = matched
-				return nil
-			}).WithTimeout(90 * time.Second).WithPolling(5 * time.Second).Should(Succeed())
+			vm, err := getVMFromCluster(clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
 
-			Expect(pvcs).To(HaveLen(1))
-			spec, _ := pvcs[0]["spec"].(map[string]interface{})
-			Expect(spec).NotTo(BeNil())
-			scName, _ := spec["storageClassName"].(string)
-			Expect(scName).NotTo(BeEmpty(), "PVC for VM %s should have storageClassName", clusterName)
-			if expectedSC := getDefaultStorageClass(); expectedSC != "" {
-				Expect(scName).To(Equal(expectedSC))
+			tmplSpec, err := labelMap(vm, "spec", "template", "spec")
+			Expect(err).NotTo(HaveOccurred())
+			volumes, ok := tmplSpec["volumes"].([]interface{})
+			Expect(ok).To(BeTrue(), "VM should define volumes")
+			Expect(volumes).NotTo(BeEmpty())
+
+			var bootVol map[string]interface{}
+			for _, v := range volumes {
+				vol, ok := v.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if name, _ := vol["name"].(string); name == "boot" {
+					bootVol = vol
+					break
+				}
 			}
+			Expect(bootVol).NotTo(BeNil(), "expected a volume named boot")
+
+			cd, ok := bootVol["containerDisk"].(map[string]interface{})
+			Expect(ok).To(BeTrue(),
+				"current SP implementation uses containerDisk for boot (not PVC/DataVolume); got %#v", bootVol)
+			image, _ := cd["image"].(string)
+			Expect(image).NotTo(BeEmpty(), "boot containerDisk should reference a guest OS image")
+			Expect(bootVol).NotTo(HaveKey("persistentVolumeClaim"),
+				"boot must not be PVC-backed with current SP")
+			Expect(bootVol).NotTo(HaveKey("dataVolume"),
+				"boot must not be DataVolume-backed with current SP")
+
+			GinkgoWriter.Printf("TC-33: VM %s boot containerDisk image=%s\n", clusterName, image)
 		})
 
 	})
