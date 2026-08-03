@@ -35,7 +35,7 @@ func initKubevirtSP() {
 		}
 
 		// Health lives under /vms/health (same pattern as container/acm SPs)
-		resp, err := http.Get(kubevirtSPURL + "/vms/health")
+		resp, err := kubevirtHTTPClient().Get(kubevirtSPURL + "/vms/health")
 		if err != nil || resp.StatusCode != http.StatusOK {
 			GinkgoWriter.Printf("KubeVirt SP not reachable at %s (tests will skip)\n", kubevirtSPURL)
 			kubevirtSPSkipped = true
@@ -99,7 +99,15 @@ func doRequestToURL(url, method, payload string) (*http.Response, error) {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	return (&http.Client{}).Do(req)
+	return kubevirtHTTPClient().Do(req)
+}
+
+// kubevirtHTTPClient reuses the suite client (10s timeout) when available.
+func kubevirtHTTPClient() *http.Client {
+	if httpClient != nil {
+		return httpClient
+	}
+	return &http.Client{Timeout: 10 * time.Second}
 }
 
 // VMSpec represents a minimal VM specification for testing
@@ -234,8 +242,13 @@ const (
 )
 
 // kubevirtNamespace returns the namespace where the SP creates VMs.
+// Prefer KUBERNETES_NAMESPACE (compose/SP export), then deploy flag env
+// KUBEVIRT_VM_NAMESPACE, then legacy KUBEVIRT_NAMESPACE.
 func kubevirtNamespace() string {
 	if ns := os.Getenv("KUBERNETES_NAMESPACE"); ns != "" {
+		return ns
+	}
+	if ns := os.Getenv("KUBEVIRT_VM_NAMESPACE"); ns != "" {
 		return ns
 	}
 	if ns := os.Getenv("KUBEVIRT_NAMESPACE"); ns != "" {
@@ -244,9 +257,13 @@ func kubevirtNamespace() string {
 	return "vms"
 }
 
-// expectProblemDetails asserts an RFC 7807-ish problem body (type + title at minimum).
+// expectProblemDetails asserts an OpenAPI Error (RFC 7807) response:
+// Content-Type application/problem+json with required type + title.
 func expectProblemDetails(resp *http.Response) map[string]interface{} {
 	GinkgoHelper()
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	Expect(ct).To(ContainSubstring("application/problem+json"),
+		"OpenAPI Error responses must use application/problem+json, got %q", resp.Header.Get("Content-Type"))
 	var problem map[string]interface{}
 	Expect(json.NewDecoder(resp.Body).Decode(&problem)).To(Succeed())
 	Expect(problem).To(HaveKey("type"))
@@ -270,6 +287,42 @@ func expectProblemDetailContains(resp *http.Response, substrings ...string) map[
 	Expect(matched).To(BeTrue(),
 		"problem details %#v should mention one of %v", problem, substrings)
 	return problem
+}
+
+// expectOpenAPIValidationErrorContains asserts an OpenAPI-layer validation failure
+// mentions at least one of the substrings.
+//
+// TODO(FLPATH-4751): OpenAPI middleware currently returns text/plain via http.Error
+// instead of application/problem+json required by the OpenAPI Error schema. Accept
+// either until https://redhat.atlassian.net/browse/FLPATH-4751 is fixed, then require
+// problem+json only (expectProblemDetailContains).
+func expectOpenAPIValidationErrorContains(resp *http.Response, substrings ...string) {
+	GinkgoHelper()
+	body, err := io.ReadAll(resp.Body)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(body).NotTo(BeEmpty())
+
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	blob := strings.ToLower(string(body))
+	if strings.Contains(ct, "json") || (len(body) > 0 && body[0] == '{') {
+		var problem map[string]interface{}
+		if err := json.Unmarshal(body, &problem); err == nil {
+			Expect(problem).To(HaveKey("type"))
+			Expect(problem).To(HaveKey("title"))
+			blob = strings.ToLower(fmt.Sprintf("%v %v %v", problem["type"], problem["title"], problem["detail"]))
+		}
+	}
+
+	matched := false
+	for _, s := range substrings {
+		if strings.Contains(blob, strings.ToLower(s)) {
+			matched = true
+			break
+		}
+	}
+	Expect(matched).To(BeTrue(),
+		"validation error body %q (content-type %q) should mention one of %v — workaround for FLPATH-4751",
+		string(body), resp.Header.Get("Content-Type"), substrings)
 }
 
 // normalizeProviderOperations converts SPRM operations (string slice or comma string) to uppercased []string.
@@ -510,6 +563,13 @@ func createTestVM(name string) (id string, err error) {
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return "", err
 	}
+	// OpenAPI CreateVM 201 → VM { path, spec }
+	if _, ok := parsed["path"]; !ok {
+		return "", fmt.Errorf("create VM 201 missing path: %s", string(body))
+	}
+	if _, ok := parsed["spec"]; !ok {
+		return "", fmt.Errorf("create VM 201 missing spec: %s", string(body))
+	}
 	pathStr, _ := parsed["path"].(string)
 	id = extractIDFromPath(pathStr)
 	if id == "" {
@@ -572,13 +632,19 @@ func deleteVMFromCluster(vmName, namespace string) error {
 	return nil
 }
 
-// verifyVMDeleted confirms VirtualMachine no longer exists
+// verifyVMDeleted confirms VirtualMachine no longer exists.
+// Succeeds only on NotFound; other kubectl/oc errors are returned so Eventually
+// can keep polling or fail (unlike treating any get failure as "gone").
 func verifyVMDeleted(vmName, namespace string) error {
-	cmd := exec.Command("oc", "get", "vm", vmName, "-n", namespace)
-	if err := cmd.Run(); err != nil {
-		return nil // VM doesn't exist (expected)
+	out, err := runKubeCmd("get", "vm", vmName, "-n", namespace)
+	if err == nil {
+		return fmt.Errorf("VM %s still exists in namespace %s", vmName, namespace)
 	}
-	return fmt.Errorf("VM %s still exists in namespace %s", vmName, namespace)
+	blob := strings.ToLower(out + " " + err.Error())
+	if strings.Contains(blob, "notfound") || strings.Contains(blob, "not found") {
+		return nil
+	}
+	return fmt.Errorf("failed checking VM %s/%s deleted: %w (%s)", namespace, vmName, err, strings.TrimSpace(out))
 }
 
 // checkClusterAccess verifies kubectl/oc connectivity

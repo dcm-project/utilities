@@ -29,7 +29,7 @@ The KubeVirt SP test suite validates VM lifecycle management through the DCM pla
 
 ## Prerequisites
 
-- OpenShift/K8s with KubeVirt/CNV and at least one StorageClass
+- OpenShift/K8s with KubeVirt/CNV (green suite uses containerDisk; StorageClass not required)
 - DCM stack + KubeVirt SP (`./scripts/deploy-dcm.sh --kubevirt-service-provider ...`)
 - NATS for status tests
 - `oc`/`kubectl` access for cluster assertions
@@ -41,7 +41,9 @@ export KUBECONFIG=/path/to/kubeconfig
 export DCM_GATEWAY_URL=http://localhost:8080/api/v1alpha1
 export DCM_KUBEVIRT_SP_URL=http://localhost:8081/api/v1alpha1
 export DCM_NATS_URL=nats://localhost:4222
+# Same NS as deploy --kubevirt-vm-namespace (SP compose uses KUBERNETES_NAMESPACE)
 export KUBERNETES_NAMESPACE=vms
+# Optional; helpers also accept KUBEVIRT_VM_NAMESPACE
 
 make test-kubevirt-sp
 ```
@@ -50,7 +52,7 @@ make test-kubevirt-sp
 
 | TC | Status | Notes |
 |----|--------|-------|
-| TC-01 | Implemented | Provider `service_type`, `schema_version`, `endpoint` |
+| TC-01 | Implemented | Select vm provider by `/api/v1alpha1/vms` endpoint; assert registration fields |
 | TC-04 | Implemented | Health healthy |
 | TC-06 | Implemented | Create + cluster labels |
 | TC-07 | Implemented | Custom `?id=` |
@@ -58,23 +60,23 @@ make test-kubevirt-sp
 | TC-10 | Implemented | Duplicate id → 409 |
 | TC-11 | Implemented | Domain resources present on cluster VM |
 | TC-12 | Implemented | GET existing |
-| TC-13 | Implemented | GET missing (404 preferred; 500 tolerated) |
-| TC-14 | Implemented | GET status phase |
-| TC-15 | Implemented | List contains 3 created VMs |
-| TC-16 | Implemented | Unlabeled cluster VM excluded |
-| TC-18 | Implemented | DELETE + cluster gone |
-| TC-19 | Implemented | DELETE missing |
-| TC-21 | Implemented | Transitions + GET status |
+| TC-13 | Implemented | GET missing → 404 problem+json (Skip on 500: FLPATH-4752) |
+| TC-14 | Implemented | GET `spec.status` phase (Skip on empty/zeroed spec: FLPATH-4754) |
+| TC-15 | Implemented | List contains 3 created VMs; per-create cleanup |
+| TC-16 | Implemented | Unlabeled cluster VM excluded; label get must succeed |
+| TC-18 | Implemented | DELETE 204; cluster NotFound; GET 404 (Skip API assert on 500: FLPATH-4752) |
+| TC-19 | Implemented | DELETE missing → 404 (Skip on 500: FLPATH-4752) |
+| TC-21 | Implemented | NATS id-filtered transitions; Fail if Pending/started order incomplete |
 | TC-22 | Implemented | CloudEvent schema; filter by VM id |
 | TC-23 | Implemented | Catalog → Running + cluster labels |
 | TC-24 | Implemented | Delete instance → STI gone + VM gone |
 | TC-25 | Implemented | Malformed JSON / content-type |
 | TC-26 | Implemented | DCM labels on VM + template |
 | TC-27 | Implemented | Instance id label round-trip |
-| TC-28c | Implemented | Tiny memory / admission path |
+| TC-28c | Implemented | OpenAPI 1MB accepted; maps to cluster 1M |
 | TC-29 | Implemented | Invalid memory unit |
 | TC-31 | Implemented | 5 parallel creates |
-| TC-32 | Implemented | External halt/start via runStrategy |
+| TC-32 | Implemented | External halt → Stopped/Succeeded/Stopping + runStrategy Halted |
 | TC-33 | Implemented | Boot disk maps to containerDisk (PVC/SC deferred) |
 
 ## Notes
@@ -84,3 +86,5 @@ make test-kubevirt-sp
 - STI status casing is `Running` (not `RUNNING`).
 - Specs clean up via Ginkgo `DeferCleanup` / `deleteTestVM` (no shared leftover-cleaner in-repo).
 - Disruptive / Skip-stub cases: checkout `kubevirt-provider-tests-deferred`
+- Contract source of truth: SP OpenAPI (`api/v1alpha1/openapi.yaml`); ADR examples that predate the schema (flat create body, `/api/v1/vm`) are superseded by OpenAPI.
+- Known SP gaps tracked in Jira: [FLPATH-4751](https://redhat.atlassian.net/browse/FLPATH-4751) (OpenAPI 400 content-type), [FLPATH-4752](https://redhat.atlassian.net/browse/FLPATH-4752) (missing VM → 500 not 404), [FLPATH-4754](https://redhat.atlassian.net/browse/FLPATH-4754) (GET/CREATE returns empty/zeroed `spec`, no `status`).

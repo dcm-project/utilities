@@ -160,6 +160,7 @@ DEPLOY_ARGS=()
 ENABLE_CONTAINER_SP=false
 ENABLE_ACM_CLUSTER_SP=false
 ENABLE_KUBEVIRT_SP=false
+KUBEVIRT_VM_NS_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -214,7 +215,11 @@ while [[ $# -gt 0 ]]; do
         --deploy-acm|--deploy-mce)
             DEPLOY_ARGS+=("$1")
             shift ;;
-        --compose-file|--kubeconfig|--k8s-container-namespace|--acm-cluster-namespace|--kubevirt-vm-namespace|--cluster-api|--cluster-username|--cluster-password|--acm-cluster-sp-repo|--acm-cluster-sp-branch)
+        --compose-file|--kubeconfig|--k8s-container-namespace|--acm-cluster-namespace|--cluster-api|--cluster-username|--cluster-password|--acm-cluster-sp-repo|--acm-cluster-sp-branch)
+            DEPLOY_ARGS+=("$1" "$2")
+            shift 2 ;;
+        --kubevirt-vm-namespace)
+            KUBEVIRT_VM_NS_ARG="$2"
             DEPLOY_ARGS+=("$1" "$2")
             shift 2 ;;
         --help)
@@ -274,6 +279,12 @@ fi
 if [[ "${ENABLE_KUBEVIRT_SP}" == "true" ]]; then
     export DCM_KUBEVIRT_SP_URL="${DCM_KUBEVIRT_SP_URL:-http://localhost:8081/api/v1alpha1}"
     info "DCM_KUBEVIRT_SP_URL=${DCM_KUBEVIRT_SP_URL}"
+    # Keep Ginkgo cluster lookups in the same NS the SP uses (compose KUBERNETES_NAMESPACE).
+    if [[ -z "${KUBERNETES_NAMESPACE:-}" ]]; then
+        export KUBERNETES_NAMESPACE="${KUBEVIRT_VM_NS_ARG:-${KUBEVIRT_VM_NAMESPACE:-vms}}"
+    fi
+    export KUBEVIRT_VM_NAMESPACE="${KUBEVIRT_VM_NAMESPACE:-${KUBERNETES_NAMESPACE}}"
+    info "KUBERNETES_NAMESPACE=${KUBERNETES_NAMESPACE}"
 fi
 
 # Build ginkgo arguments.

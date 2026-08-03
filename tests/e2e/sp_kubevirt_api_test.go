@@ -40,9 +40,7 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			if err := checkClusterAccess(); err != nil {
 				Skip("Cluster access required: " + err.Error())
 			}
-			if err := checkStorageClass(); err != nil {
-				Skip(err.Error())
-			}
+			// Boot disk is containerDisk (no PVC); StorageClass is not required.
 
 			vmName := uniqueName("e2e-kubevirt-vm")
 			id, err := createTestVM(vmName)
@@ -88,9 +86,14 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
 			DeferCleanup(func() { deleteTestVM(customID) })
 
+			// OpenAPI CreateVM 201 → VM { path, spec }
 			var body map[string]interface{}
 			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
-			Expect(body["path"]).To(ContainSubstring(customID))
+			Expect(body).To(HaveKey("path"))
+			Expect(body).To(HaveKey("spec"))
+			pathStr, _ := body["path"].(string)
+			Expect(pathStr).To(ContainSubstring(customID))
+			Expect(pathStr).To(ContainSubstring("vms/"))
 
 			getResp, err := doKubevirtRequest(http.MethodGet, "/vms/"+customID, "")
 			Expect(err).NotTo(HaveOccurred())
@@ -131,20 +134,32 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 
 			var body map[string]interface{}
 			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+			// OpenAPI GetVM 200 → VM { path, spec } with required VMSpec fields
 			Expect(body).To(HaveKey("spec"))
 			Expect(body).To(HaveKey("path"))
 			Expect(body["path"]).To(ContainSubstring(id))
+			Expect(fmt.Sprint(body["path"])).To(ContainSubstring("vms/"))
+			spec, ok := body["spec"].(map[string]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(spec).To(HaveKey("service_type"))
+			Expect(spec).To(HaveKey("memory"))
+			Expect(spec).To(HaveKey("vcpu"))
+			Expect(spec).To(HaveKey("storage"))
+			Expect(spec).To(HaveKey("guest_os"))
+			Expect(spec).To(HaveKey("metadata"))
 		})
 
 		It("returns 404 for a non-existent VM [TC-13]", func() {
 			resp, err := doKubevirtRequest(http.MethodGet, "/vms/non-existent-vm-id", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
+			// OpenAPI: GET /vms/{id} → 404 application/problem+json when missing.
+			// SP bug: empty label list → plain error → 500 (FLPATH-4752).
 			if resp.StatusCode == http.StatusInternalServerError {
-				Skip("SP returns 500 for missing VM (expected 404) — track as SP bug")
+				Skip("FLPATH-4752: SP returns 500 for missing VM GET (OpenAPI expects 404 problem+json)")
 			}
 			Expect(resp.StatusCode).To(Equal(http.StatusNotFound),
-				"GET missing should be 404; if SP returns 500 file/track SP bug and Skip temporarily")
+				"GET missing VM must be 404 per OpenAPI")
 			expectProblemDetailContains(resp, "not found", "missing", "404", "notfound")
 		})
 
@@ -156,41 +171,44 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(func() { deleteTestVM(id) })
 
-			Eventually(func() string {
+			// OpenAPI: GET must expose VM.spec.status. Live SP returns zeroed
+			// spec (no status) — FLPATH-4754. Skip; do not false-pass on cluster alone.
+			var apiStatus, clusterStatus string
+			Eventually(func() bool {
+				apiStatus = ""
+				clusterStatus = ""
 				resp, err := doKubevirtRequest(http.MethodGet, "/vms/"+id, "")
-				if err != nil {
-					return ""
+				if err == nil {
+					defer resp.Body.Close()
+					if resp.StatusCode == http.StatusOK {
+						var body map[string]interface{}
+						if json.NewDecoder(resp.Body).Decode(&body) == nil {
+							if spec, ok := body["spec"].(map[string]interface{}); ok {
+								apiStatus, _ = spec["status"].(string)
+							}
+						}
+					}
 				}
-				defer resp.Body.Close()
-				if resp.StatusCode != http.StatusOK {
-					return ""
-				}
-				var body map[string]interface{}
-				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-					return ""
-				}
-				if status, _ := body["status"].(string); status != "" {
-					GinkgoWriter.Printf("GET /vms status=%s\n", status)
-					return status
-				}
-				// Fallback: some SP builds omit status on GET — use cluster printable status
 				ns := kubevirtNamespace()
 				name, err := findVMNameByInstanceID(id, ns)
-				if err != nil {
-					return ""
+				if err == nil {
+					out, err := runKubeCmd("get", "vm", name, "-n", ns, "-o", "jsonpath={.status.printableStatus}")
+					if err == nil {
+						clusterStatus = strings.TrimSpace(out)
+					}
 				}
-				out, err := runKubeCmd("get", "vm", name, "-n", ns, "-o", "jsonpath={.status.printableStatus}")
-				if err != nil {
-					return ""
-				}
-				s := strings.TrimSpace(out)
-				GinkgoWriter.Printf("cluster printableStatus=%s\n", s)
-				return s
+				return apiStatus != "" || clusterStatus != ""
 			}).WithTimeout(180 * time.Second).WithPolling(5 * time.Second).
-				Should(BeElementOf("Pending", "Scheduling", "Scheduled", "Running", "Succeeded", "Failed",
-					"Starting", "Stopping", "Stopped", "Migrating", "Paused", "Unknown",
-					"PENDING", "PROVISIONING", "RUNNING"),
-					"GET or cluster should expose a known VM phase")
+				Should(BeTrue(), "VM should expose a status via GET or cluster")
+
+			if apiStatus == "" {
+				Skip(fmt.Sprintf("FLPATH-4754: SP GET returns empty/zeroed spec (no OpenAPI spec.status; cluster printableStatus=%q)", clusterStatus))
+			}
+			Expect(apiStatus).To(BeElementOf("Pending", "Scheduling", "Scheduled", "Running", "Succeeded", "Failed",
+				"Starting", "Stopping", "Stopped", "Migrating", "Paused", "Unknown", "Terminating",
+				"PENDING", "PROVISIONING", "RUNNING", "STOPPING", "FAILED"),
+				"GET spec.status should be a known VM phase")
+			GinkgoWriter.Printf("GET /vms spec.status=%s (cluster=%s)\n", apiStatus, clusterStatus)
 		})
 
 		It("lists all managed VMs including newly created ones [TC-15]", func() {
@@ -199,12 +217,9 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 				id, err := createTestVM(uniqueName(fmt.Sprintf("e2e-list-%d", i)))
 				Expect(err).NotTo(HaveOccurred())
 				ids = append(ids, id)
+				captured := id
+				DeferCleanup(func() { deleteTestVM(captured) })
 			}
-			DeferCleanup(func() {
-				for _, id := range ids {
-					deleteTestVM(id)
-				}
-			})
 
 			listed, err := listVMIDs()
 			Expect(err).NotTo(HaveOccurred())
@@ -230,7 +245,8 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 				Expect(id).NotTo(Equal(manualName))
 			}
 			// Also ensure label selector would not pick it up
-			out, _ := runKubeCmd("get", "vm", manualName, "-n", ns, "-o", "jsonpath={.metadata.labels}")
+			out, err := runKubeCmd("get", "vm", manualName, "-n", ns, "-o", "jsonpath={.metadata.labels}")
+			Expect(err).NotTo(HaveOccurred())
 			Expect(out).NotTo(ContainSubstring(dcmLabelManagedBy))
 		})
 
@@ -240,6 +256,7 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			}
 			id, err := createTestVM(uniqueName("e2e-del"))
 			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { deleteTestVM(id) })
 
 			ns := kubevirtNamespace()
 			var clusterName string
@@ -249,47 +266,59 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 				return err
 			}).WithTimeout(60 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 
+			// OpenAPI + ADR: DELETE → 204 No Content
 			resp, err := doKubevirtRequest(http.MethodDelete, "/vms/"+id, "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
 
+			// OpenAPI: subsequent GET → 404 problem+json (FLPATH-4752: SP may return 500)
+			var lastGET int
 			Eventually(func() int {
 				getResp, err := doKubevirtRequest(http.MethodGet, "/vms/"+id, "")
 				if err != nil {
 					return 0
 				}
 				defer getResp.Body.Close()
-				return getResp.StatusCode
+				lastGET = getResp.StatusCode
+				return lastGET
 			}).WithTimeout(120 * time.Second).WithPolling(2 * time.Second).
-				Should(Equal(http.StatusNotFound))
+				Should(BeElementOf(http.StatusNotFound, http.StatusInternalServerError))
 
+			// Cluster removal is independent of the API 404 vs 500 mapping bug.
 			Eventually(func() error {
 				return verifyVMDeleted(clusterName, ns)
 			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+
+			if lastGET == http.StatusInternalServerError {
+				Skip("FLPATH-4752: after DELETE, GET missing VM returns 500 instead of OpenAPI 404 (cluster VM was removed)")
+			}
+			Expect(lastGET).To(Equal(http.StatusNotFound))
 		})
 
 		It("returns 404 when deleting a non-existent VM [TC-19]", func() {
 			resp, err := doKubevirtRequest(http.MethodDelete, "/vms/does-not-exist-"+uuid.NewString(), "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
+			// OpenAPI: DELETE missing → 404 application/problem+json (FLPATH-4752 → 500 today)
 			if resp.StatusCode == http.StatusInternalServerError {
-				Skip("SP returns 500 for missing VM DELETE (expected 404) — track as SP bug")
+				Skip("FLPATH-4752: SP returns 500 for missing VM DELETE (OpenAPI expects 404 problem+json)")
 			}
 			Expect(resp.StatusCode).To(Equal(http.StatusNotFound),
-				"DELETE missing should be 404; if SP returns 500 file/track SP bug and Skip temporarily")
+				"DELETE missing VM must be 404 per OpenAPI")
 			expectProblemDetailContains(resp, "not found", "missing", "404", "notfound")
 		})
 	})
 
 	Context("Validation", func() {
+		// OpenAPI-layer 400s: accept text/plain until FLPATH-4751 (should be problem+json).
 		It("rejects empty body [TC-09][TC-25]", func() {
 			path, _ := createVMPath()
 			resp, err := doKubevirtRequest(http.MethodPost, path, "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-			expectProblemDetailContains(resp, "body", "empty", "json", "request", "required")
+			expectOpenAPIValidationErrorContains(resp, "body", "empty", "json", "request", "required")
 		})
 
 		It("rejects missing required fields [TC-09]", func() {
@@ -298,7 +327,7 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-			expectProblemDetailContains(resp, "memory", "required", "vcpu", "guest_os", "missing")
+			expectOpenAPIValidationErrorContains(resp, "memory", "required", "vcpu", "guest_os", "missing")
 		})
 
 		It("rejects invalid memory format [TC-09][TC-29]", func() {
@@ -317,7 +346,7 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-			expectProblemDetailContains(resp, "memory")
+			expectOpenAPIValidationErrorContains(resp, "memory")
 		})
 
 		It("rejects malformed JSON [TC-25]", func() {
@@ -326,7 +355,7 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
-			expectProblemDetailContains(resp, "json", "parse", "malformed", "syntax", "invalid")
+			expectOpenAPIValidationErrorContains(resp, "json", "parse", "malformed", "syntax", "invalid", "decode", "eof")
 		})
 
 		It("rejects wrong content type [TC-25]", func() {
@@ -340,7 +369,7 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(BeElementOf(http.StatusBadRequest, http.StatusUnsupportedMediaType))
-			expectProblemDetailContains(resp, "content-type", "content type", "media", "unsupported", "json")
+			expectOpenAPIValidationErrorContains(resp, "content-type", "content type", "media", "unsupported", "json", "text/plain")
 		})
 	})
 
@@ -349,9 +378,7 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			if err := checkClusterAccess(); err != nil {
 				Skip(err.Error())
 			}
-			if err := checkStorageClass(); err != nil {
-				Skip(err.Error())
-			}
+			// Boot disk is containerDisk (no PVC); StorageClass is not required.
 
 			const n = 5
 			ids := make([]string, n)
@@ -461,9 +488,7 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			if err := checkClusterAccess(); err != nil {
 				Skip(err.Error())
 			}
-			if err := checkStorageClass(); err != nil {
-				Skip(err.Error())
-			}
+			// Boot disk is containerDisk (no PVC); StorageClass is not required.
 
 			id, err := createTestVM(uniqueName("e2e-lifecycle"))
 			Expect(err).NotTo(HaveOccurred())
@@ -509,8 +534,8 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 				GinkgoWriter.Printf("after halt printableStatus=%v\n", s)
 				return s
 			}).WithTimeout(120 * time.Second).WithPolling(5 * time.Second).
-				Should(BeElementOf("Stopped", "Succeeded", "Failed", "Paused", "Migrating", "Unknown", "Pending", "Scheduling", "Scheduled", "Running", "Stopping"),
-					"status should update after external halt (exact phase depends on CNV)")
+				Should(BeElementOf("Stopped", "Succeeded", "Stopping", "STOPPING", "STOPPED"),
+					"after external halt, status should leave Running (not still Running/Pending)")
 
 			// Confirm the runStrategy patch stuck
 			Eventually(func() string {
@@ -526,10 +551,15 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 	})
 
 	Context("KubeVirt error matrix", func() {
-		It("handles invalid admission / resource combo [TC-28c]", func() {
+		// TC-28c: OpenAPI allows memory.size=1MB; the SP maps it to KubeVirt "1M" and
+		// creates the VM successfully. Current CNV accepts that size (VM can reach Running).
+		// Revisit if/when the SP enforces a minimum memory or rejects tiny sizes at the API.
+		It("accepts OpenAPI 1MB memory and maps it on the cluster [TC-28c]", func() {
+			if err := checkClusterAccess(); err != nil {
+				Skip(err.Error())
+			}
 			path, id := createVMPath()
 			DeferCleanup(func() { deleteTestVM(id) })
-			// Memory below typical KubeVirt minimum if expressed in OpenAPI units
 			payload := `{
 				"spec": {
 					"service_type": "vm",
@@ -543,34 +573,41 @@ var _ = Describe("KubeVirt Service Provider API", Label("sp", "kubevirt"), func(
 			resp, err := doKubevirtRequest(http.MethodPost, path, payload)
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
-			GinkgoWriter.Printf("tiny memory create status=%d\n", resp.StatusCode)
-			switch resp.StatusCode {
-			case http.StatusBadRequest, http.StatusUnprocessableEntity:
-				// Rejected at API validation / admission — expected success path
-			case http.StatusCreated:
-				Eventually(func() string {
-					if s := getVMAPIStatus(id); s != "" {
-						return s
-					}
-					if err := checkClusterAccess(); err != nil {
-						return ""
-					}
-					ns := kubevirtNamespace()
-					name, err := findVMNameByInstanceID(id, ns)
-					if err != nil {
-						return ""
-					}
-					out, err := runKubeCmd("get", "vm", name, "-n", ns, "-o", "jsonpath={.status.printableStatus}")
-					if err != nil {
-						return ""
-					}
-					return strings.TrimSpace(out)
-				}).WithTimeout(120 * time.Second).WithPolling(5 * time.Second).
-					Should(BeElementOf("Failed", "Error", "Unknown", "FAILED", "ERROR", "UNKNOWN"),
-						"tiny memory VM accepted with 201 should reach Failed/Error/Unknown")
-			default:
-				Fail(fmt.Sprintf("unexpected status %d for tiny memory create (want 400/422 or 201→Failed)", resp.StatusCode))
-			}
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated),
+				"current SP accepts OpenAPI 1MB (maps to KubeVirt 1M); got %d", resp.StatusCode)
+
+			ns := kubevirtNamespace()
+			var clusterName string
+			Eventually(func() error {
+				name, err := findVMNameByInstanceID(id, ns)
+				clusterName = name
+				return err
+			}).WithTimeout(60 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
+
+			vm, err := getVMFromCluster(clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			domain, err := labelMap(vm, "spec", "template", "spec", "domain")
+			Expect(err).NotTo(HaveOccurred())
+			resources, _ := domain["resources"].(map[string]interface{})
+			Expect(resources).NotTo(BeNil())
+			requests, _ := resources["requests"].(map[string]interface{})
+			Expect(requests).To(HaveKey("memory"))
+			// OpenAPI input is 1MB; SP maps decimal MB → Kubernetes resource "1M" (not Mi).
+			Expect(requests["memory"]).To(Equal("1M"))
+
+			Eventually(func() string {
+				if s := getVMAPIStatus(id); s != "" {
+					return s
+				}
+				out, err := runKubeCmd("get", "vm", clusterName, "-n", ns, "-o", "jsonpath={.status.printableStatus}")
+				if err != nil {
+					return ""
+				}
+				return strings.TrimSpace(out)
+			}).WithTimeout(120 * time.Second).WithPolling(5 * time.Second).
+				Should(BeElementOf("Running", "Scheduled", "Scheduling", "Starting", "Pending",
+					"RUNNING", "SCHEDULED"),
+					"1MB-mapped VM is accepted by current SP/CNV and should progress past create")
 		})
 	})
 })

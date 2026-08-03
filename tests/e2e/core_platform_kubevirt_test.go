@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -23,9 +24,7 @@ var _ = Describe("Core Platform - KubeVirt Provider", Label("core", "platform", 
 			if err := checkClusterAccess(); err != nil {
 				Skip("kubectl/oc cluster access required for core platform test")
 			}
-			if err := checkStorageClass(); err != nil {
-				Skip("At least one StorageClass required for VM provisioning: " + err.Error())
-			}
+			// Boot disk is containerDisk (no PVC); StorageClass is not required for create.
 		})
 
 		AfterAll(func() {
@@ -63,7 +62,22 @@ var _ = Describe("Core Platform - KubeVirt Provider", Label("core", "platform", 
 			Expect(ok).To(BeTrue())
 			Expect(providers).NotTo(BeEmpty(), "no vm providers registered")
 
-			p := providers[0].(map[string]interface{})
+			var p map[string]interface{}
+			for _, raw := range providers {
+				cand, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				endpoint, _ := cand["endpoint"].(string)
+				name, _ := cand["name"].(string)
+				if strings.Contains(endpoint, "/api/v1alpha1/vms") ||
+					strings.Contains(strings.ToLower(name), "kubevirt") {
+					p = cand
+					break
+				}
+			}
+			Expect(p).NotTo(BeNil(), "no vm provider with /api/v1alpha1/vms endpoint (or kubevirt name)")
+
 			kubevirtProviderName, _ = p["name"].(string)
 			Expect(kubevirtProviderName).NotTo(BeEmpty())
 
@@ -73,7 +87,7 @@ var _ = Describe("Core Platform - KubeVirt Provider", Label("core", "platform", 
 			Expect(endpoint).To(ContainSubstring("/api/v1alpha1/vms"))
 			ops, ok := p["operations"]
 			if !ok || ops == nil {
-				Skip("provider operations omitted by SPRM payload — assert when SPRM includes them")
+				Skip("provider operations omitted by SPRM payload — ADR expects CREATE/DELETE/READ")
 			}
 			opsNorm := normalizeProviderOperations(ops)
 			Expect(opsNorm).To(ContainElements("CREATE", "DELETE", "READ"))

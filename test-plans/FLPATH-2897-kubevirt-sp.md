@@ -43,9 +43,10 @@ Key test coverage in repo (no need to duplicate at E2E):
 
 - OpenShift/Kubernetes cluster with KubeVirt/CNV installed
 - NATS server running (for status monitoring)
-- DCM stack deployed (`./scripts/deploy-dcm.sh`)
+- DCM stack deployed (`./scripts/deploy-dcm.sh --kubevirt-service-provider …`)
 - KubeVirt SP running and registered with DCM
 - Cluster has available storage classes for VM disks
+- Ginkgo process env `KUBERNETES_NAMESPACE` (or `KUBEVIRT_VM_NAMESPACE`) matches deploy `--kubevirt-vm-namespace` / SP compose namespace (default `vms`)
 
 ## API Endpoints Under Test
 
@@ -176,8 +177,9 @@ Key test coverage in repo (no need to duplicate at E2E):
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Create VM and wait for it to start | — |
-| 2 | GET the VM | Status reflects actual VM phase (Running, Pending, etc.) |
+| 1 | Create VM and wait for a status signal | — |
+| 2 | GET `/api/v1alpha1/vms/{id}` | OpenAPI `spec.status` is a known phase |
+| 3 | If SP returns empty/zeroed `spec` (no `status`) | Skip — [FLPATH-4754](https://redhat.atlassian.net/browse/FLPATH-4754) (do not false-pass on cluster alone) |
 
 ### List VMs
 
@@ -221,9 +223,12 @@ Key test coverage in repo (no need to duplicate at E2E):
 | Step | Action | Expected |
 |------|--------|----------|
 | 1 | Create a VM, note `id` | — |
-| 2 | DELETE `/api/v1alpha1/vms/{id}` | HTTP 204 |
-| 3 | Verify on KubeVirt cluster | VirtualMachine removed |
-| 4 | GET the same `id` | HTTP 404 |
+| 2 | Resolve cluster VM name via `dcm.project/dcm-instance-id` label | Name found in configured VM namespace |
+| 3 | DELETE `/api/v1alpha1/vms/{id}` | HTTP 204 |
+| 4 | Poll GET `/api/v1alpha1/vms/{id}` | OpenAPI: HTTP 404 + problem+json; if SP returns 500 track FLPATH-4752 |
+| 5 | Verify on KubeVirt cluster (`oc`/`kubectl get vm`) | VirtualMachine **NotFound** (other get errors must not count as deleted) |
+
+**Notes:** Cluster removal (step 5) is asserted even when GET still returns 500 (FLPATH-4752). Cleanup uses `DeferCleanup` so a mid-spec failure does not leak the VM.
 
 #### TC-19: Delete a non-existent VM
 
@@ -246,10 +251,14 @@ Key test coverage in repo (no need to duplicate at E2E):
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Create a VM | Initial status may be PENDING or PROVISIONING |
-| 2 | Wait for VM to start | — |
-| 3 | GET the VM | Status eventually becomes RUNNING |
-| 4 | Check status field | Reflects VirtualMachine phase |
+| 1 | Subscribe to NATS subject `dcm.vm` | — |
+| 2 | Create a VM | — |
+| 3 | Collect status events | Only events whose `data.id` / `data.instance_id` equals this VM id (ignore empty/stale ids) |
+| 4 | Observe phases | At least one Pending/PROVISIONING-family and one Running/started-family event (ADR mapping) |
+| 5 | Assert order | Pending-family index **before** started-family index; **Fail** if either family is missing |
+| 6 | GET `/api/v1alpha1/vms/{id}` | Prefer non-empty `spec.status`; cluster `printableStatus` may bridge if SP omits it |
+
+**Notes:** Missing Pending or started-family events is a hard failure (order cannot be validated by Skip).
 
 #### TC-22: Status events published to NATS
 
@@ -397,13 +406,13 @@ Key test coverage in repo (no need to duplicate at E2E):
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Create VM, wait for RUNNING status | — |
-| 2 | Stop VM via KubeVirt API (not DCM) | VM enters Stopped phase |
-| 3 | Verify NATS event published | Status event reflects "Stopped" |
-| 4 | Start VM via KubeVirt API | VM returns to RUNNING |
-| 5 | Verify DCM API reflects state | GET /vms/{id} shows RUNNING |
+| 1 | Create VM, wait until status is Running (or Failed/Succeeded) | — |
+| 2 | Patch VM `spec.runStrategy` to `Halted` via KubeVirt API (not DCM) | Patch succeeds |
+| 3 | Poll GET / cluster `printableStatus` | Phase is **Stopped**, **Succeeded**, or **Stopping** (must leave Running) |
+| 4 | Confirm cluster | `spec.runStrategy` == `Halted` |
+| 5 | Patch `runStrategy` back to `Always` | Restored for cleanup |
 
-**Rationale:** Real VMs get stopped, restarted, migrated. Need to verify monitoring tracks external state changes.
+**Rationale:** Real VMs get stopped/restarted externally. Status must reflect the halt — accepting `Running` after halt is a false pass.
 
 ### Storage Class Handling
 
@@ -458,10 +467,11 @@ Key test files:
 ## Test Environment Requirements
 
 - **OpenShift 4.x** or **Kubernetes 1.25+** with KubeVirt/CNV
-- **Storage:** At least one StorageClass available for PVCs
+- **Storage:** Green suite boots via **containerDisk** (no PVC); StorageClass is not required for those paths. PVC/SC coverage is deferred.
 - **Network:** Service/Pod networking functional
 - **Resources:** Sufficient CPU/memory for test VMs (minimal specs acceptable)
 - **Permissions:** Service account with VirtualMachine CRUD permissions
+- **Namespace:** Tests and SP share the same VM namespace via `KUBERNETES_NAMESPACE` / `KUBEVIRT_VM_NAMESPACE` (set by `run-e2e.sh` when `--kubevirt-vm-namespace` is passed)
 
 ### Automated Prerequisite Checks
 
@@ -470,20 +480,11 @@ Tests automatically verify prerequisites and skip gracefully if not met:
 | Check | Function | Tests Affected | Skip Message |
 |-------|----------|----------------|--------------|
 | **Cluster Access** | `checkClusterAccess()` | All cluster-dependent tests | "kubectl/oc cluster access required" |
-| **StorageClass Availability** | `checkStorageClass()` | VM creation tests (TC-06, TC-23) | "At least one StorageClass required" |
 | **KubeVirt SP Reachable** | `requireKubevirtSP()` | All KubeVirt SP tests | "KubeVirt SP not available" |
 | **NATS Reachable** | `requireNATS()` | Status monitoring tests (TC-21, TC-22) | "NATS server not available" |
 
-**Storage Class Check Details:**
-- Verifies at least one StorageClass exists in cluster
-- Uses `kubectl get storageclass -o json` or `oc get storageclass -o json`
-- Logs count of available storage classes
-- Helper function `getDefaultStorageClass()` identifies default class
-- Tests skip with clear message if no storage classes found
-
-**Benefits:**
-- Tests don't fail due to missing prerequisites
-- Clear skip messages guide environment setup
+**Notes:**
+- `checkStorageClass()` remains available for deferred PVC paths; green suite (containerDisk) does not gate on it
 - Supports both OpenShift (`oc`) and Kubernetes (`kubectl`)
 - Prerequisite validation happens in `BeforeEach` or `BeforeAll` hooks
 

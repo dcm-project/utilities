@@ -4,7 +4,6 @@ package e2e_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -98,7 +97,14 @@ var _ = Describe("KubeVirt SP Status Monitoring", Label("sp", "kubevirt", "nats"
 			Expect(matched).To(HaveKey("source"))
 			Expect(matchedData).To(HaveKey("status"))
 			status := matchedData["status"].(string)
-			Expect(status).To(BeElementOf("PENDING", "PROVISIONING", "RUNNING", "Pending", "Scheduling", "Scheduled", "Running", "Failed"))
+			// ADR status reporting uses DCM enums (PROVISIONING/RUNNING/…). Current SP
+			// monitor publishes KubeVirt VMI phases (Pending/Running/…) — accept both
+			// until the SP maps phases to DCM status (see monitor/phase.go TODO).
+			Expect(status).To(BeElementOf(
+				"PENDING", "PROVISIONING", "RUNNING", "STOPPING", "FAILED", "DELETED",
+				"Pending", "Scheduling", "Scheduled", "Running", "Succeeded", "Failed",
+				"Stopped", "Unknown", "Terminating",
+			))
 			Expect(matchedData).To(HaveKey("timestamp"))
 
 			GinkgoWriter.Printf("Received NATS event status=%s id=%s\n", status, vmID)
@@ -143,7 +149,11 @@ var _ = Describe("KubeVirt SP Status Monitoring", Label("sp", "kubevirt", "nats"
 					continue
 				}
 				eid, _ := data["id"].(string)
-				if eid != "" && eid != vmID {
+				if eid == "" {
+					eid, _ = data["instance_id"].(string)
+				}
+				// Only accept events for this VM — ignore empty/stale ids on dcm.vm.
+				if eid != vmID {
 					continue
 				}
 				status, _ := data["status"].(string)
@@ -186,9 +196,10 @@ var _ = Describe("KubeVirt SP Status Monitoring", Label("sp", "kubevirt", "nats"
 					runningIdx = i
 				}
 			}
-			if pendingIdx < 0 || runningIdx < 0 {
-				Skip(fmt.Sprintf("did not observe both Pending and started phases (got %v); cannot assert order", statuses))
-			}
+			Expect(pendingIdx).To(BeNumerically(">=", 0),
+				"TC-21 must observe a Pending/PROVISIONING-family status (got %v)", statuses)
+			Expect(runningIdx).To(BeNumerically(">=", 0),
+				"TC-21 must observe a started-family status (got %v)", statuses)
 			Expect(pendingIdx).To(BeNumerically("<", runningIdx),
 				"Pending should precede Running when both observed: %v", statuses)
 
@@ -197,6 +208,8 @@ var _ = Describe("KubeVirt SP Status Monitoring", Label("sp", "kubevirt", "nats"
 	})
 })
 
+// getVMAPIStatus returns OpenAPI VM.spec.status (read-only lifecycle field).
+// Falls back to a top-level "status" only if present for older payloads.
 func getVMAPIStatus(id string) string {
 	resp, err := doKubevirtRequest("GET", "/vms/"+id, "")
 	if err != nil {
@@ -210,22 +223,30 @@ func getVMAPIStatus(id string) string {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return ""
 	}
+	if spec, ok := body["spec"].(map[string]interface{}); ok {
+		if s, _ := spec["status"].(string); s != "" {
+			return s
+		}
+	}
 	s, _ := body["status"].(string)
 	return s
 }
 
+// isStartedPhase matches ADR "past provisioning" states: RUNNING / STOPPING / FAILED
+// (and current SP KubeVirt phase names for those). Scheduled is still PROVISIONING.
 func isStartedPhase(s string) bool {
 	switch strings.ToLower(s) {
-	case "running", "scheduled", "succeeded", "failed":
+	case "running", "succeeded", "failed", "stopping", "stopped", "unknown":
 		return true
 	default:
 		return false
 	}
 }
 
+// isPendingPhase matches ADR PROVISIONING: Pending, Scheduling, Scheduled (+ DCM aliases).
 func isPendingPhase(s string) bool {
 	switch strings.ToLower(s) {
-	case "pending", "provisioning", "scheduling":
+	case "pending", "provisioning", "scheduling", "scheduled":
 		return true
 	default:
 		return false
