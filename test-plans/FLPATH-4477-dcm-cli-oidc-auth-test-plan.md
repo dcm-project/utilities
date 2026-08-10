@@ -178,7 +178,7 @@ dcm login --issuer-url http://keycloak:8080/realms/dcm --control-plane-url http:
 
 Open the displayed URL, enter the user code, log in as `dcm-admin`.
 
-**Expected:** CLI prints `Logged in as dcm-admin (token expires in ~5m)` on stderr.
+**Expected:** CLI prints `Logged in as dcm-admin (token expires in …; auto-refresh enabled)` on stderr.
 
 **Step 3: Verify token is stored**
 
@@ -260,41 +260,70 @@ None.
 
 #### Description
 
-When the access token expires (5 min TTL), the CLI automatically refreshes using the stored refresh token without user intervention.
+When the access token is expired, the CLI automatically refreshes using the stored refresh token without user intervention. Do not wait for Keycloak's default 300s access-token lifespan - force access-token expiry in the file store instead (same `IsExpired` / JWT `exp` behavior as TC-19).
 
 #### Prerequisites
 
-- TC-01 passed, tokens stored
-- Access token has expired or is about to expire
+- Stack running with auth enabled
+- File store active so the access token can be invalidated (force with `DBUS_SESSION_BUS_ADDRESS=` if needed; same technique as TC-13/TC-19)
 
 
 
 #### Steps
 
-**Step 1: Wait for token expiry**
+**Step 1: Ensure tokens are in the file store**
+
+If `~/.dcm/tokens.json` is missing (keyring backend was used in TC-01), re-login with file store:
 
 ```bash
-echo "Waiting 310s for access token to expire..."
-sleep 310
+rm -f ~/.dcm/tokens.json
+DBUS_SESSION_BUS_ADDRESS= dcm login --issuer-url http://keycloak:8080/realms/dcm --control-plane-url http://localhost:8080
 ```
 
-**Step 2: Run a CLI command**
+Complete browser auth. Confirm `~/.dcm/tokens.json` exists.
+
+**Step 2: Force access-token expiry (keep refresh token)**
+
+`IsExpired` prefers the JWT `exp` claim on `access_token`. Backdating `expiry` alone does not trigger refresh while the JWT is still valid. Replace `access_token` with a non-JWT so the CLI treats the session as expired and attempts refresh. Leave `refresh_token` unchanged.
 
 ```bash
-dcm policy list
+python3 << 'PY'
+import json, time
+from pathlib import Path
+p = Path.home() / ".dcm" / "tokens.json"
+d = json.loads(p.read_text())
+iu = "http://keycloak:8080/realms/dcm"
+d[iu]["access_token"] = "not-a-jwt"  # forces IsExpired; JWT exp would ignore backdated expiry
+d[iu]["expiry"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+p.write_text(json.dumps(d))
+print("Invalidated access token; refresh token left intact")
+PY
+```
+
+**Step 3: Run a CLI command**
+
+```bash
+DBUS_SESSION_BUS_ADDRESS= dcm policy list --control-plane-url http://localhost:8080
 ```
 
 **Expected:** Command succeeds (HTTP 200). The CLI automatically refreshed the access token using the refresh token. No login prompt.
 
-**Step 3: Verify updated token in store**
-
-File store only (skip if OS keyring is the active backend):
+**Step 4: Verify updated token in store**
 
 ```bash
-test -f ~/.dcm/tokens.json && python3 -c "import json; d=json.load(open('$HOME/.dcm/tokens.json')); print('Tokens present:', bool(d))"
+python3 << 'PY'
+import json
+from pathlib import Path
+d = json.loads((Path.home() / ".dcm" / "tokens.json").read_text())
+iu = "http://keycloak:8080/realms/dcm"
+tok = d[iu]["access_token"]
+assert tok != "not-a-jwt", "access_token was not refreshed"
+print("Refreshed access_token present:", bool(tok))
+print("expiry:", d[iu].get("expiry"))
+PY
 ```
 
-**Expected:** Token data present with updated expiry. If keyring is active, Step 2 success is sufficient proof of refresh.
+**Expected:** `access_token` is a real JWT again (not `not-a-jwt`) with an updated expiry.
 
 #### Cleanup
 
