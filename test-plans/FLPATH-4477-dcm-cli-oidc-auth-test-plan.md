@@ -599,20 +599,18 @@ When `issuer-url` is empty (default), the CLI sends no Authorization header. On 
 #### Prerequisites
 
 - Stack running with `AUTH_DISABLED=true` (see Global Setup auth-disabled procedure)
-- No `issuer-url` in config, no `DCM_ISSUER_URL`, no `DCM_TOKEN`
-
-
-
-#### Steps
-
-**Step 1: Clear auth config**
+- No `issuer-url` in config, no `DCM_ISSUER_URL`, no `DCM_TOKEN`. Clear first if needed:
 
 ```bash
 rm -f ~/.dcm/config.yaml
 unset DCM_ISSUER_URL DCM_TOKEN
 ```
 
-**Step 2: Run command without auth**
+
+
+#### Steps
+
+**Step 1: Run command without auth**
 
 ```bash
 dcm policy list --control-plane-url http://localhost:8080
