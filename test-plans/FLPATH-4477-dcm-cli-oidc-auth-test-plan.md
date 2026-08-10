@@ -639,19 +639,18 @@ Running `dcm logout` when no token is stored should not error - it should print 
 
 #### Prerequisites
 
-- No stored tokens
+- No stored tokens. Clear first if needed:
+
+```bash
+rm -f ~/.dcm/tokens.json
+# Clear keyring entry if present (service dcm-cli, account = issuer URL)
+```
 
 
 
 #### Steps
 
-**Step 1: Clear any stored tokens**
-
-```bash
-rm -f ~/.dcm/tokens.json
-```
-
-**Step 2: Run logout**
+**Step 1: Run logout**
 
 ```bash
 dcm logout --issuer-url http://keycloak:8080/realms/dcm 2>&1
