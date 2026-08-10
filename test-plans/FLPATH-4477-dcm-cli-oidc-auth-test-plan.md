@@ -812,7 +812,7 @@ When the file-based TokenStore is active, `~/.dcm/tokens.json` must have mode `0
 
 #### Prerequisites
 
-- File fallback active (keyring unavailable). Force on Linux Secret Service before login:
+- File fallback active (keyring unavailable). Force on Linux Secret Service before login by running the command with an **empty** `DBUS_SESSION_BUS_ADDRESS` prefix (`DBUS_SESSION_BUS_ADDRESS=`). That is not `unset` - it sets the var to `""` for that process only so Secret Service cannot reach the session bus, `go-keyring` probe fails, and the CLI falls back to `~/.dcm/tokens.json`:
 
 ```bash
 rm -f ~/.dcm/tokens.json
