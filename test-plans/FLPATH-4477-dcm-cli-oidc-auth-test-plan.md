@@ -734,11 +734,11 @@ dcm logout
 
 #### Description
 
-`DCM_ISSUER_URL` env var configures the issuer URL without needing a flag or config file.
+`DCM_ISSUER_URL` env var configures the issuer URL without needing a flag or config file. Also validates config precedence for issuer URL: flags > env vars > config file (REQ-ACFG-070).
 
 #### Prerequisites
 
-- No `issuer-url` in config file
+- No `issuer-url` in config file (clear before Step 1 if needed)
 
 
 
@@ -747,6 +747,8 @@ dcm logout
 **Step 1: Login via env var**
 
 ```bash
+rm -f ~/.dcm/config.yaml
+unset DCM_ISSUER_URL
 DCM_ISSUER_URL=http://keycloak:8080/realms/dcm dcm login --control-plane-url http://localhost:8080
 ```
 
@@ -762,10 +764,35 @@ DCM_ISSUER_URL=http://keycloak:8080/realms/dcm dcm policy list --control-plane-u
 
 **Expected:** Command succeeds with stored token.
 
+**Step 3: Flag overrides env**
+
+```bash
+DCM_ISSUER_URL=http://keycloak:8080/realms/dcm dcm logout || true
+DCM_ISSUER_URL=http://invalid.example/realms/dcm dcm login --issuer-url http://keycloak:8080/realms/dcm --control-plane-url http://localhost:8080
+```
+
+Complete browser auth.
+
+**Expected:** Login succeeds using `--issuer-url`. A wrong `DCM_ISSUER_URL` alone would fail discovery; success means the flag won.
+
+**Step 4: Env overrides config file**
+
+```bash
+DCM_ISSUER_URL=http://keycloak:8080/realms/dcm dcm logout || true
+printf 'issuer-url: http://invalid.example/realms/dcm\ncontrol-plane-url: http://localhost:8080\n' > ~/.dcm/config.yaml
+DCM_ISSUER_URL=http://keycloak:8080/realms/dcm dcm login --control-plane-url http://localhost:8080
+```
+
+Complete browser auth.
+
+**Expected:** Login succeeds using `DCM_ISSUER_URL`. Success with a wrong config `issuer-url` means env beat the config file.
+
 #### Cleanup
 
 ```bash
-DCM_ISSUER_URL=http://keycloak:8080/realms/dcm dcm logout
+DCM_ISSUER_URL=http://keycloak:8080/realms/dcm dcm logout || true
+rm -f ~/.dcm/config.yaml
+unset DCM_ISSUER_URL
 ```
 
 ---
