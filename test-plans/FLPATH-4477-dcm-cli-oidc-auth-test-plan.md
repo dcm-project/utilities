@@ -496,12 +496,11 @@ None.
 
 #### Description
 
-When both `DCM_TOKEN` and a stored OIDC token exist, `DCM_TOKEN` takes precedence.
+When both `DCM_TOKEN` and a stored OIDC token exist, `DCM_TOKEN` takes precedence. Prove precedence by showing the stored token works, then an invalid static token makes the same call fail.
 
 #### Prerequisites
 
 - Stored token from `dcm login`
-- A valid JWT obtained via curl
 
 
 
@@ -515,23 +514,26 @@ dcm login --issuer-url http://keycloak:8080/realms/dcm --control-plane-url http:
 
 Complete browser auth.
 
-**Step 2: Get a different token**
+**Step 2: List policies with the stored token**
 
 ```bash
-SA_TOKEN=$(curl -s -d 'grant_type=client_credentials&client_id=dcm-proxy&client_secret=<DCM_PROXY_SECRET>' http://keycloak:8080/realms/dcm/protocol/openid-connect/token | jq -r .access_token)
+dcm policy list --control-plane-url http://localhost:8080
 ```
 
-**Step 3: Use DCM_TOKEN - should override stored token**
+**Expected:** HTTP 200 response with a policies list (empty or populated). Stored OIDC token is used.
+
+**Step 3: Override with an invalid static token**
 
 ```bash
-DCM_TOKEN=$SA_TOKEN dcm policy list
+DCM_TOKEN=not-a-valid-token dcm policy list --control-plane-url http://localhost:8080 2>&1; echo "Exit code: $?"
 ```
 
-**Expected:** API call succeeds. If server logs are inspected, the request uses the service account identity, not `dcm-admin`.
+**Expected:** Command fails (non-zero exit). Control plane rejects the request (HTTP 401 or equivalent auth error). Success here would mean the stored OIDC token was used instead of `DCM_TOKEN`.
 
 #### Cleanup
 
 ```bash
+unset DCM_TOKEN
 dcm logout
 ```
 
