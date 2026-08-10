@@ -1233,11 +1233,10 @@ Global Setup (OIDC-capable install, auth-enabled stack)
 2. **Keyring availability in CI/containers**: Keyring probe may fail in headless environments. File fallback activates automatically, but first invocation has a small delay from the probe. File-only assertions (TC-13, TC-19, optional TC-03/17 checks) must force or detect file fallback. Confirm file store by removing `~/.dcm/tokens.json` and re-running a command - a 401 / missing auth (both with and without `DBUS_SESSION_BUS_ADDRESS=`) means file store is live; success without the env var means keyring still holds credentials.
 3. **Token in process listing**: `--token <jwt>` flag value is visible in `/proc/<pid>/cmdline`. Prefer `DCM_TOKEN` env var for sensitive environments. Environment variables are also visible to the same user via `/proc/<pid>/environ` but require same-UID access.
 4. **No HTTPS enforcement on issuer URL**: The CLI does not reject `http://` issuer URLs. In production, Keycloak should always be behind TLS. The CLI warns about HTTP for API calls but not for the issuer URL itself.
-5. **SaveConfig ignores custom config path**: `config.SaveConfig()` always writes to `~/.dcm/config.yaml` regardless of `--config` flag or `DCM_CONFIG` env var.
-6. **Single-process refresh lock**: The `sync.Mutex` in `AuthTransport` only protects against concurrent goroutines within a single process. Multiple `dcm` processes may race on refresh token usage if Keycloak has `revoke-refresh-token=true`.
-7. **Browser auto-open**: `xdg-open` / `open` / `cmd start` may fail in headless environments. The CLI prints the URL to stderr as fallback.
-8. **Issuer hostname**: Discovery `issuer` must match `--issuer-url`. Stock compose advertises `http://keycloak:8080/realms/dcm`. Keep that issuer for control-plane reachability; add a host `/etc/hosts` entry so the CLI can resolve `keycloak`. Do not override `KC_HOSTNAME` to `localhost:8180` - the control-plane container cannot use that issuer.
-9. **TC-19 expiry field is insufficient**: `IsExpired` reads JWT `exp` from `access_token` before `TokenData.Expiry`. TC-19 must invalidate `access_token` (or wait for real JWT expiry) or refresh is never attempted.
+5. **Single-process refresh lock**: The `sync.Mutex` in `AuthTransport` only protects against concurrent goroutines within a single process. Multiple `dcm` processes may race on refresh token usage if Keycloak has `revoke-refresh-token=true`.
+6. **Browser auto-open**: `xdg-open` / `open` / `cmd start` may fail in headless environments. The CLI prints the URL to stderr as fallback.
+7. **Issuer hostname**: Discovery `issuer` must match `--issuer-url`. Stock compose advertises `http://keycloak:8080/realms/dcm`. Keep that issuer for control-plane reachability; add a host `/etc/hosts` entry so the CLI can resolve `keycloak`. Do not override `KC_HOSTNAME` to `localhost:8180` - the control-plane container cannot use that issuer.
+8. **TC-19 expiry field is insufficient**: `IsExpired` reads JWT `exp` from `access_token` before `TokenData.Expiry`. TC-19 must invalidate `access_token` (or wait for real JWT expiry) or refresh is never attempted.
 
 ---
 
