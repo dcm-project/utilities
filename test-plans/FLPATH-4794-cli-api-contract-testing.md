@@ -1,0 +1,526 @@
+# Test Plan: FLPATH-4794 — CLI-to-API Contract Testing
+
+| Field | Value |
+|---|---|
+| **Ticket** | [FLPATH-4794](https://redhat.atlassian.net/browse/FLPATH-4794) |
+| **Author** | Thomas Stetson |
+| **Version** | 1.0 |
+| **Last Updated** | 2026-08-17 |
+| **Status** | Draft |
+
+## Description
+
+This test plan defines a contract testing strategy between the DCM CLI
+(`dcm-project/cli`) and the control-plane API (`dcm-project/control-plane`).
+The goal is to detect serialization/schema drift automatically — preventing
+the class of bug identified in
+[FLPATH-4770](https://redhat.atlassian.net/browse/FLPATH-4770), where the CLI
+silently dropped required API fields because its `go.mod` dependency was stale.
+
+Contract tests validate that:
+1. The CLI can parse documented YAML examples without data loss
+2. The resulting JSON payload satisfies the API's required-field constraints
+3. The API accepts the CLI's request and returns a success response
+
+### References
+
+- [FLPATH-4770](https://redhat.atlassian.net/browse/FLPATH-4770) — Getting
+  Started user journey broken end-to-end (the motivating bug)
+- [FLPATH-3355](https://redhat.atlassian.net/browse/FLPATH-3355) — Develop
+  contract tests between api-gateway and providers (Backlog; gateway↔SP scope)
+- [control-plane#40](https://github.com/dcm-project/control-plane/issues/40) —
+  Org-wide: no real cross-repo contract validation exists
+- [FLPATH-4759](https://redhat.atlassian.net/browse/FLPATH-4759) — kind +
+  control-plane + osac-sp E2E (first real-service contract test)
+- [FLPATH-4638](https://redhat.atlassian.net/browse/FLPATH-4638) — Write CLI
+  catalog item and catalog instance E2E tests
+- [FLPATH-4617](https://redhat.atlassian.net/browse/FLPATH-4617) — Update CLI
+  test fixtures to use multi-resource catalog item schema
+
+### Acceptance Criteria
+
+1. A CI workflow validates that the CLI can create catalog items and instances
+   against a real control-plane — failing if required fields are missing or
+   silently dropped
+2. Documented Getting Started YAML examples are validated against the current
+   API schema on every PR that changes them
+3. CLI dependency staleness is detected before it causes silent data loss
+
+---
+
+## Environment and Global Setup
+
+### Environment Requirements
+
+| Component | Required for |
+|-----------|-------------|
+| Go (version from `go.mod`) | Building CLI from source |
+| Docker or Podman | Running the subsystem compose stack |
+| `curl`, `jq` | Health checks and verification |
+| Network ports 28080, 5432, 28081 | Subsystem compose stack (control-plane, Postgres, WireMock) |
+
+### Deployment Configuration
+
+The contract tests reuse the **existing control-plane `catalog-subsystem`
+compose stack** (`test/subsystem/catalog/docker-compose.yaml`), which provides:
+
+- Postgres (port 5432) — real database
+- Control-plane (port 28080) — real binary with auth disabled, NATS disabled
+- WireMock (port 28081) — mocks placement-manager (accepts all create requests)
+
+This is the lightest possible real-API configuration (~15s startup, no
+external cluster needed).
+
+### Global Setup
+
+```bash
+# Clone control-plane (hosts the compose stack)
+git clone --depth=1 https://github.com/dcm-project/control-plane.git /tmp/cp
+cd /tmp/cp
+
+# Start subsystem stack
+make catalog-subsystem-test-up
+
+# Verify health
+curl -sf http://localhost:28080/api/v1alpha1/health
+```
+
+---
+
+## Test Tiers
+
+| Tier | Requires | Scope | Notes |
+|------|----------|-------|-------|
+| Static (CLI repo) | Go toolchain only | YAML→JSON round-trip, no network | Fastest; catches serialization bugs |
+| Subsystem (control-plane repo) | Compose stack | CLI binary → real API | Catches schema + validation drift |
+| E2E (utilities repo) | Full DCM stack | CLI → gateway → control-plane | Already planned in FLPATH-4638 |
+
+This plan focuses on **Tiers 1 and 2** — the lightweight, CI-native checks
+that would have caught FLPATH-4770 without requiring the full DCM stack.
+
+---
+
+## Upstream Test Coverage
+
+### What exists today
+
+| Repo | Test type | What it validates |
+|------|-----------|-------------------|
+| `cli` | Unit (`internal/commands/*_test.go`) | CLI flag parsing, output formatting, HTTP mock interactions |
+| `cli` | Snapshot tests (`go-snaps`) | CLI output matches recorded snapshots |
+| `control-plane` | Subsystem (`test/subsystem/catalog/`) | CRUD operations via generated Go client against real API |
+| `utilities` | E2E (`tests/e2e/cli_*.go`) | CLI binary against live full stack |
+
+### What's missing (this plan fills)
+
+- No test validates CLI's `parseInputFileAs` path with the **actual documented
+  YAML** from the website
+- No test exercises CLI against a **real control-plane** as part of CLI repo CI
+- No alerting mechanism for stale `go.mod` dependencies
+
+---
+
+## Test Cases
+
+### TC-01: CLI catalog item create parses multi-resource YAML correctly
+
+**Priority:** P1 (critical)
+**Type:** Functional
+**Method:** Automated (static — CLI repo unit test)
+**Labels:** `contract`, `static`
+**Requires:** None
+
+#### Description
+
+Validates that the CLI's YAML→JSON conversion preserves the `spec.resources`
+field structure. This is the exact path that failed in FLPATH-4770: the CLI's
+Go types lacked the `Resources` field, so `json.Unmarshal` silently dropped it.
+
+#### Prerequisites
+
+- CLI repo checked out with current `go.mod`
+- Test fixture `testdata/docs/small-vm.yaml` (copy of website tutorial YAML)
+
+#### Steps
+
+**Step 1: Parse the documented catalog item YAML through CLI's conversion path**
+
+```go
+// In internal/commands/contract_test.go
+func TestDocCatalogItemPreservesResources(t *testing.T) {
+    ci, err := parseInputFileAs[CatalogItemFile]("testdata/docs/small-vm.yaml")
+    require.NoError(t, err)
+
+    // The critical assertion: resources field is populated
+    require.NotEmpty(t, ci.Spec.Resources, "spec.resources must not be empty")
+    assert.Equal(t, "main", ci.Spec.Resources[0].Name)
+    assert.Equal(t, "vm", ci.Spec.Resources[0].ServiceType)
+    assert.NotNil(t, ci.Spec.Resources[0].Fields)
+
+    // Verify JSON round-trip (what actually goes on the wire)
+    payload, _ := json.Marshal(ci)
+    var raw map[string]any
+    json.Unmarshal(payload, &raw)
+    spec := raw["spec"].(map[string]any)
+    _, hasResources := spec["resources"]
+    assert.True(t, hasResources, "JSON payload must contain 'resources' key")
+}
+```
+
+**Expected:** Test passes — `spec.resources[0].name == "main"`,
+`spec.resources[0].service_type == "vm"`, JSON payload contains `resources` key.
+
+#### Cleanup
+
+None.
+
+---
+
+### TC-02: CLI catalog instance create preserves resource field in user_values
+
+**Priority:** P1 (critical)
+**Type:** Functional
+**Method:** Automated (static — CLI repo unit test)
+**Labels:** `contract`, `static`
+**Requires:** None
+
+#### Description
+
+Validates that `user_values[].resource` is preserved through the CLI's
+YAML→JSON conversion. This field was added as part of the multi-resource schema
+and is now required by the API.
+
+#### Prerequisites
+
+- Test fixture `testdata/docs/my-vm.yaml` (copy of website tutorial YAML)
+
+#### Steps
+
+**Step 1: Parse the documented instance YAML**
+
+```go
+func TestDocInstancePreservesResourceField(t *testing.T) {
+    inst, err := parseInputFileAs[InstanceFile]("testdata/docs/my-vm.yaml")
+    require.NoError(t, err)
+
+    require.NotEmpty(t, inst.Spec.UserValues)
+    for i, uv := range inst.Spec.UserValues {
+        assert.NotEmpty(t, uv.Resource,
+            "user_values[%d].resource must not be empty", i)
+    }
+    assert.Equal(t, "main", inst.Spec.UserValues[0].Resource)
+}
+```
+
+**Expected:** All `user_values` entries have `resource == "main"`.
+
+#### Cleanup
+
+None.
+
+---
+
+### TC-03: CLI creates catalog item against real control-plane (subsystem)
+
+**Priority:** P1 (critical)
+**Type:** Functional
+**Method:** Automated (subsystem — control-plane compose stack)
+**Labels:** `contract`, `subsystem`
+**Requires:** Catalog-subsystem compose stack running
+
+#### Description
+
+Builds the CLI from source and exercises the full Getting Started catalog item
+creation against a real control-plane instance. This would have caught
+FLPATH-4770 because the API returns HTTP 400 when `spec.resources` is missing.
+
+#### Prerequisites
+
+- Catalog-subsystem compose stack running (port 28080)
+- WireMock configured to accept placement-manager requests
+- CLI built from source (`go build -o /tmp/dcm ./cmd/dcm`)
+
+#### Steps
+
+**Step 1: Create a catalog item using the documented YAML**
+
+```bash
+/tmp/dcm catalog item create \
+  --from-file testdata/docs/small-vm.yaml \
+  --id contract-test-item \
+  --control-plane-url http://localhost:28080
+```
+
+**Expected:** Exit code 0. Table output showing `UID=contract-test-item`,
+`SERVICE TYPE=vm`.
+
+**Step 2: Verify the item via GET**
+
+```bash
+/tmp/dcm catalog item get contract-test-item \
+  --control-plane-url http://localhost:28080
+```
+
+**Expected:** Exit code 0. Output shows the catalog item with correct fields.
+
+**Step 3: Verify via raw API that resources are stored correctly**
+
+```bash
+curl -s http://localhost:28080/api/v1alpha1/catalog-items/contract-test-item | \
+  jq '.spec.resources[0].name'
+```
+
+**Expected:** Output is `"main"`.
+
+#### Cleanup
+
+```bash
+/tmp/dcm catalog item delete contract-test-item \
+  --control-plane-url http://localhost:28080
+```
+
+---
+
+### TC-04: CLI creates catalog item instance against real control-plane
+
+**Priority:** P1 (critical)
+**Type:** Functional
+**Method:** Automated (subsystem — control-plane compose stack)
+**Labels:** `contract`, `subsystem`
+**Requires:** TC-03 (catalog item exists)
+
+#### Description
+
+Validates the full instance creation path including the `user_values[].resource`
+field. The API returns HTTP 400 if `resource` is missing from any user_value
+entry.
+
+#### Prerequisites
+
+- Catalog item `contract-test-item` exists (TC-03)
+- WireMock stub for placement-manager returns 202 (already configured by
+  compose stack)
+
+#### Steps
+
+**Step 1: Create an instance using the documented YAML**
+
+```bash
+/tmp/dcm catalog instance create \
+  --from-file testdata/docs/my-vm.yaml \
+  --id contract-test-instance \
+  --control-plane-url http://localhost:28080
+```
+
+**Expected:** Exit code 0. Table output showing `UID=contract-test-instance`.
+
+**Step 2: Verify via raw API that user_values have resource field**
+
+```bash
+curl -s http://localhost:28080/api/v1alpha1/catalog-item-instances/contract-test-instance | \
+  jq '.spec.user_values[0].resource'
+```
+
+**Expected:** Output is `"main"`.
+
+#### Cleanup
+
+```bash
+curl -s -X DELETE http://localhost:28080/api/v1alpha1/catalog-item-instances/contract-test-instance
+/tmp/dcm catalog item delete contract-test-item \
+  --control-plane-url http://localhost:28080
+```
+
+---
+
+### TC-05: CLI fails gracefully when API rejects malformed payload
+
+**Priority:** P2 (important)
+**Type:** Negative
+**Method:** Automated (subsystem)
+**Labels:** `contract`, `negative`
+**Requires:** Compose stack running
+
+#### Description
+
+Verifies that when the CLI sends a payload the API rejects (e.g., missing
+`spec.resources`), the error is surfaced to the user with actionable detail.
+
+#### Prerequisites
+
+- A YAML file using the **old** flat schema (no `resources` wrapper)
+
+#### Steps
+
+**Step 1: Create a YAML file with the old schema**
+
+```bash
+cat > /tmp/old-schema.yaml << 'EOF'
+api_version: v1alpha1
+display_name: "Old Schema"
+spec:
+  service_type: vm
+  fields:
+    - path: vcpu.count
+      editable: true
+      default: 2
+EOF
+```
+
+**Step 2: Attempt to create a catalog item with the old-schema YAML**
+
+```bash
+/tmp/dcm catalog item create \
+  --from-file /tmp/old-schema.yaml \
+  --id should-fail \
+  --control-plane-url http://localhost:28080
+```
+
+**Expected:** Non-zero exit code. Error message includes the API's problem
+detail (e.g., `"property \"resources\" is missing"`). The CLI should NOT
+silently succeed with a partial payload.
+
+#### Cleanup
+
+None (creation should fail).
+
+---
+
+### TC-06: Dependency freshness check detects stale control-plane pin
+
+**Priority:** P2 (important)
+**Type:** Functional
+**Method:** Automated (CI workflow — CLI repo)
+**Labels:** `contract`, `ci`
+**Requires:** None
+
+#### Description
+
+A scheduled workflow that compares the CLI's pinned `control-plane` version
+against `@main` and alerts if more than 2 weeks behind.
+
+#### Steps
+
+**Step 1: Query current and latest versions**
+
+```bash
+CURRENT=$(grep 'dcm-project/control-plane' go.mod | awk '{print $2}')
+LATEST=$(go list -m -json github.com/dcm-project/control-plane@main 2>/dev/null | jq -r .Version)
+echo "Current: $CURRENT"
+echo "Latest:  $LATEST"
+```
+
+**Step 2: Compare timestamps**
+
+```bash
+# Extract date from pseudo-version (format: v0.0.0-YYYYMMDDHHMMSS-hash)
+current_date=$(echo "$CURRENT" | grep -oP '\d{14}' | head -1)
+latest_date=$(echo "$LATEST" | grep -oP '\d{14}' | head -1)
+# Alert if difference > 14 days
+```
+
+**Expected:** If the dependency is fresh (≤14 days), no alert. If stale,
+the workflow emits `::warning` or opens a GitHub issue.
+
+#### Cleanup
+
+None.
+
+---
+
+## Not Testable at Contract Level
+
+| Scenario | Reason | Where tested instead |
+|----------|--------|---------------------|
+| Full provisioning flow (SP assigns resources) | Requires real SP + cluster | E2E suite (`core_platform_test.go`) |
+| Authentication/OIDC token refresh | Auth disabled in subsystem stack | Auth subsystem tests + E2E auth tests |
+| CLI output formatting/table rendering | UI concern, not a contract | CLI unit tests with snapshots |
+| Network failures / retries | Infrastructure-level | Not currently tested anywhere |
+
+---
+
+## Implementation Notes
+
+### Proposed file locations
+
+| Artifact | Location |
+|----------|----------|
+| Static contract tests | `cli/internal/commands/contract_test.go` |
+| Doc fixture YAMLs | `cli/testdata/docs/small-vm.yaml`, `cli/testdata/docs/my-vm.yaml` |
+| Subsystem workflow | `control-plane/.github/workflows/cli-contract.yaml` |
+| Dep freshness workflow | `cli/.github/workflows/dep-freshness.yaml` |
+| Doc validation workflow | `dcm-project.github.io/.github/workflows/validate-examples.yaml` |
+
+### Existing infrastructure to reuse
+
+- `control-plane/test/subsystem/catalog/docker-compose.yaml` — compose stack
+  with Postgres + control-plane + WireMock
+- `shared-workflows/.github/workflows/black-box.yaml` — reusable CI pattern
+  for compose-up → test → compose-down
+- CLI's `internal/commands/helpers.go` — `parseInputFileAs[T]` is the exact
+  function under test
+
+### Fixture maintenance
+
+The `testdata/docs/` YAML files should be **byte-for-byte copies** of the YAML
+code blocks in the website's getting-started pages. A CI step can verify this:
+
+```bash
+# Extract YAML from website markdown and diff against fixtures
+diff <(sed -n '/^```yaml$/,/^```$/p' content/docs/.../create-small-vm-catalog-item.md | sed '1d;$d') \
+     testdata/docs/small-vm.yaml
+```
+
+---
+
+## Coverage Summary
+
+| Acceptance Criteria | Static (TC-01/02) | Subsystem (TC-03/04/05) | CI Alert (TC-06) |
+|--------------------|--------------------|--------------------------|-------------------|
+| 1. CLI creates against real API | — | TC-03, TC-04 | — |
+| 2. Doc examples validated | TC-01, TC-02 | TC-03, TC-04 | — |
+| 3. Staleness detection | — | — | TC-06 |
+
+---
+
+## Risk Observations
+
+1. **Fixture drift** — If `testdata/docs/` files get out of sync with the
+   website, the contract test gives false confidence. Mitigate with a
+   cross-repo sync check (see Fixture Maintenance above).
+
+2. **Subsystem stack divergence** — The `catalog-subsystem` compose stack may
+   evolve independently. If it changes ports or removes WireMock, the contract
+   test workflow needs updating. Low risk (stable infrastructure since Feb 2026).
+
+3. **CLI flag changes** — If the CLI renames `--control-plane-url` or
+   `--from-file`, subsystem tests break. Mitigate by running CLI with
+   `--help` as a smoke check before the journey tests.
+
+4. **Generated client vs. CLI path** — The subsystem tests use a generated
+   Go client; the contract tests exercise the CLI's own serialization path.
+   Both are needed — they test different code paths to the same API.
+
+5. **Cross-repo coordination** — Implementation spans three repos (CLI,
+   control-plane, website). Changes should be coordinated to land in sequence:
+   static tests first (CLI), then subsystem integration (control-plane),
+   then doc validation (website).
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---|---|---|
+| 1.0 | 2026-08-17 | Initial test plan: 6 test cases covering static serialization, subsystem integration, negative scenarios, and dependency freshness |
+
+---
+
+## Sanitization Notice
+
+This document is intended for sharing. The following rules apply:
+
+- No credentials, tokens, API keys, or passwords — use placeholders
+- No internal hostnames or IPs — use `localhost` for local deployments
+- No PII
+- Open-source tool and project names are fine as-is
