@@ -191,8 +191,9 @@ Following the "Local Setup" page instructions verbatim should result in a runnin
 **Step 1: Follow documented clone and start commands**
 
 ```bash
-git clone https://github.com/dcm-project/control-plane.git
-cd control-plane/deploy
+DEPLOY_DIR=$(pwd)/control-plane
+git clone https://github.com/dcm-project/control-plane.git "$DEPLOY_DIR"
+cd "$DEPLOY_DIR/deploy"
 podman-compose up -d
 ```
 
@@ -217,8 +218,8 @@ curl -s -o /dev/null -w '%{http_code}' http://localhost:7007
 **Step 4: Build CLI as documented**
 
 ```bash
-git clone https://github.com/dcm-project/cli.git
-cd cli
+git clone https://github.com/dcm-project/cli.git /tmp/cli-build
+cd /tmp/cli-build
 make build
 ./bin/dcm version
 ```
@@ -236,7 +237,7 @@ curl http://localhost:8080/api/v1alpha1/providers
 #### Cleanup
 
 ```bash
-cd control-plane/deploy && podman-compose down -v
+cd "$DEPLOY_DIR/deploy" && podman-compose down -v
 ```
 
 ---
@@ -602,40 +603,40 @@ Verify that CLI commands documented in the User Guide match actual CLI behavior 
 dcm --help
 ```
 
-**Expected:** Subcommands include `version`, `providers`, `service-types`, `catalog-items`, `policies`, `instances`, and `resources` (or equivalent).
+**Expected:** Top-level command groups include `catalog`, `sp`, `policy`, and `version`.
 
-**Step 2: Verify providers commands**
+**Step 2: Verify sp provider commands**
 
 ```bash
-dcm providers list
-dcm providers --help
+dcm sp provider list
+dcm sp provider --help
 ```
 
 **Expected:** Output format and flags match documentation at `/docs/user-guide/cli/providers/`.
 
-**Step 3: Verify catalog-items commands**
+**Step 3: Verify catalog item commands**
 
 ```bash
-dcm catalog-items list
-dcm catalog-items --help
+dcm catalog item list
+dcm catalog item --help
 ```
 
 **Expected:** Matches documentation at `/docs/user-guide/cli/catalog-items/`.
 
-**Step 4: Verify policies commands**
+**Step 4: Verify policy commands**
 
 ```bash
-dcm policies list
-dcm policies --help
+dcm policy list
+dcm policy --help
 ```
 
 **Expected:** Matches documentation at `/docs/user-guide/cli/policies/`.
 
-**Step 5: Verify instances commands**
+**Step 5: Verify catalog instance commands**
 
 ```bash
-dcm instances list
-dcm instances --help
+dcm catalog instance list
+dcm catalog instance --help
 ```
 
 **Expected:** Matches documentation at `/docs/user-guide/cli/instances/`.
@@ -643,10 +644,10 @@ dcm instances --help
 **Step 6: Verify configuration documentation**
 
 ```bash
-dcm --help | grep -i config
+dcm --help | grep -i url
 ```
 
-**Expected:** Global flags (server URL, output format) match documentation at `/docs/user-guide/cli/configuration/`.
+**Expected:** Global flags (`--control-plane-url`, `-o`/`--output`) match documentation at `/docs/user-guide/cli/configuration/`.
 
 #### Cleanup
 
@@ -743,208 +744,36 @@ However, given the site's low churn and small link surface, **manual validation 
 | **Low** | `make download-cli` pulls from `main` (no version tag). Downloaded binary version string is a commit hash, not a semver. Users following release docs may have stale v0.2.0. | TC-09 |
 | **Info** | Keycloak container exits with code 134 on ARM64 (image platform mismatch warning). Does not affect core functionality — control plane, NATS, postgres, and UI all run fine. | TC-02 |
 
-### Proposed Jira
+### Filed Defect
 
-**Project:** FLPATH
-**Type:** Bug
-**Priority:** Critical
-**Summary:** Getting Started user journey broken end-to-end: CLI cannot create catalog items against current control-plane
+The critical bug discovered during test execution was filed as
+[FLPATH-4770](https://redhat.atlassian.net/browse/FLPATH-4770) — "Getting
+Started user journey broken end-to-end: CLI cannot create catalog items against
+current control-plane."
 
-**Description:**
+**Root cause (3 layers):**
+1. Website tutorial YAML uses the pre-July flat schema (missing `spec.resources`)
+2. CLI's `go.mod` pins a stale `control-plane` dependency — its
+   `CreateCatalogItemJSONRequestBody` type lacks the `Resources` field, so
+   YAML→JSON round-trip silently drops it
+3. No published CLI artifact can create a catalog item against the current API
 
-The Getting Started path on dcm-project.github.io is completely broken for any user following the documented steps. The catalog item creation tutorial (the third step in the onboarding flow) fails at every layer:
+**Fix (in progress on local branches `FLPATH-4770-fix-user-journey`):**
+- CLI: `go get github.com/dcm-project/control-plane@main && go mod tidy`
+- Website: Update both getting-started YAML files to multi-resource schema
 
-**Layer 1 — Documentation:** The tutorial YAML (`create-small-vm-catalog-item`) uses the pre-July flat schema (`spec.service_type`, `spec.fields`). The current API requires `spec.resources[]` (multi-resource schema, control-plane PR #11, merged 2026-07-03).
-
-**Layer 2 — CLI binary:** Even with corrected YAML that includes `spec.resources`, the CLI silently drops the field. The CLI's `go.mod` pins `github.com/dcm-project/control-plane` to `e4374fc` (2026-06-17), which predates the schema change. The generated `CreateCatalogItemJSONRequestBody` type has no `Resources` field, so YAML→struct→JSON round-trip loses the data.
-
-**Layer 3 — No working release against current API:** The last semver release (v0.3.1, 2026-04-10) and all rolling `main` builds (including latest 7316690 from 2026-07-21) share the same stale dependency. No published CLI artifact can create a catalog item against the current control-plane. (Note: CLI v0.3.1 worked correctly against pre-July control-plane versions that used the old flat schema, but the documented deployment path always pulls `:main` images.)
-
-**Reproduction:**
-```bash
-# Deploy control-plane from main
-podman-compose up -d
-
-# Download CLI
-make download-cli   # gets latest main build
-
-# Follow tutorial verbatim
-dcm catalog item create --from-file small-vm.yaml --id small-vm
-# → Error: INVALID_ARGUMENT - Bad Request (400)
-#   Detail: property "resources" is missing
-
-# Fix YAML to include spec.resources — still fails
-dcm catalog item create --from-file small-vm-fixed.yaml --id small-vm
-# → Same error: CLI struct drops resources field before sending
-
-# Only raw curl works
-curl -X POST "http://localhost:8080/api/v1alpha1/catalog-items?id=small-vm" \
-  -H "Content-Type: application/json" \
-  -d '{"api_version":"v1alpha1","display_name":"Small VM","spec":{"resources":[{"name":"main","service_type":"vm"}]}}'
-# → 201 Created
-```
-
-**Impact:** Any new user or evaluator following the Getting Started docs will hit a dead end at step 3 of 7. The only workaround is raw curl, which defeats the purpose of the CLI and the tutorial.
-
-**Fix requires (all three):**
-
----
-
-**Fix 1 — CLI (`dcm-project/cli`):** Bump control-plane dependency and release.
-
-```bash
-cd cli/
-go get github.com/dcm-project/control-plane@main
-go mod tidy
-```
-
-This updates the `CreateCatalogItemJSONRequestBody` struct to include the `Resources` field. After the bump, verify with:
-
-```bash
-go build -o bin/dcm ./cmd/dcm
-bin/dcm catalog item create --from-file small-vm.yaml --id test-item
-# Should succeed (201) against a current control-plane
-```
-
-Then tag and release (e.g., `v0.4.0`).
-
----
-
-**Fix 2 — Website (`dcm-project/dcm-project.github.io`):** Replace the catalog item YAML in `content/docs/getting-started/create-small-vm-catalog-item.md`.
-
-Current (broken):
-```yaml
-api_version: v1alpha1
-display_name: "Small VM"
-spec:
-  service_type: vm
-  fields:
-    - path: metadata
-      editable: true
-    - path: vcpu.count
-      # ...
-```
-
-Fixed:
-```yaml
-api_version: v1alpha1
-display_name: "Small VM"
-spec:
-  resources:
-    - name: main
-      service_type: vm
-      fields:
-        - path: metadata
-          editable: true
-        - path: vcpu.count
-          display_name: "CPU Count"
-          editable: true
-          default: 2
-          validation_schema:
-            type: integer
-            minimum: 1
-            maximum: 4
-        - path: memory.size
-          display_name: "Memory (GB)"
-          editable: false
-          default: "2GB"
-        - path: storage.disks
-          display_name: "Storage (GB)"
-          editable: false
-          default:
-            - name: boot
-              capacity: "20GB"
-          validation_schema:
-            type: array
-        - path: guest_os.type
-          display_name: "Guest OS"
-          editable: true
-          default: "rhel-10"
-          validation_schema:
-            type: string
-            enum:
-              - rhel-9
-              - rhel-10
-```
-
-Key change: `spec.fields` moved inside `spec.resources[0]`. Each resource has a `name` (arbitrary identifier) and `service_type`.
-
-Also update the prose to explain:
-- A catalog item declares one or more **resources** (min 1)
-- Each resource specifies its service type and field configurations
-- Single-resource items use one entry in the `resources` array
-
----
-
-**Fix 3 — Website (`dcm-project/dcm-project.github.io`):** Replace the instance YAML in `content/docs/getting-started/create-small-vm-instance.md`.
-
-Current (broken):
-```yaml
-api_version: v1alpha1
-display_name: "My Dev VM"
-spec:
-  catalog_item_id: small-vm
-  user_values:
-    - path: metadata
-      value:
-        name: "small-vm"
-        labels:
-          env: "dev"
-    - path: vcpu.count
-      value: 1
-```
-
-Fixed:
-```yaml
-api_version: v1alpha1
-display_name: "My Dev VM"
-spec:
-  catalog_item_id: small-vm
-  user_values:
-    - resource: main
-      path: metadata
-      value:
-        name: "small-vm"
-        labels:
-          env: "dev"
-    - resource: main
-      path: vcpu.count
-      value: 1
-```
-
-Key change: Each `user_values` entry now requires a `resource` field that references which named resource (from the catalog item's `spec.resources[].name`) the value applies to. For single-resource items, this is always the name of the sole resource (`main` in our example).
-
----
-
-**Verification after all three fixes:**
-
-```bash
-# Deploy current control-plane
-git clone https://github.com/dcm-project/control-plane.git
-cd control-plane/deploy && podman-compose up -d
-
-# Install fixed CLI (≥ v0.4.0 or from main after go.mod bump)
-dcm version  # should show new version
-
-# Create catalog item (from fixed tutorial YAML)
-dcm catalog item create --from-file small-vm.yaml --id small-vm
-# Expected: table output showing UID=small-vm, DISPLAY NAME=Small VM, SERVICE TYPE=vm
-
-# Create instance (from fixed tutorial YAML)
-dcm catalog instance create --from-file my-vm.yaml --id my-dev-vm
-# Expected: table output showing UID=my-dev-vm (or placement error if no provider registered — that's expected and documented in Troubleshooting)
-```
-
----
+**Preventive CI:** See [FLPATH-4794](https://redhat.atlassian.net/browse/FLPATH-4794)
+and the Preventive CI Recommendations section below.
 
 **Timeline:**
 - Jun 17: CLI pins to control-plane `e4374fc` (pre-schema)
 - Jul 3: Control-plane PR #11 introduces required `spec.resources` field
-- Jul 21: CLI PR #28 updates test fixtures and table display only — **does not bump go.mod**
-- Aug 6: Issue discovered during E2E test plan execution (FLPATH-2761)
+- Jul 21: CLI PR #28 updates test fixtures and table display only — does not bump `go.mod`
+- Aug 6: Issue discovered during E2E test plan execution (this plan)
+- Aug 17: Fix implemented locally, FLPATH-4770 filed, FLPATH-4794 filed for preventive CI
 
-**Labels:** `qe`, `dcm`
-**Relates to:** FLPATH-4384 (multi-resource ADR), FLPATH-4617 (CLI fixture update), FLPATH-2761 (tech demo epic)
+Full details (reproduction steps, exact YAML diffs, verification commands) are
+in [FLPATH-4770](https://redhat.atlassian.net/browse/FLPATH-4770).
 
 ---
 

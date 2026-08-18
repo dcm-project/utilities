@@ -4,8 +4,8 @@
 |---|---|
 | **Ticket** | [FLPATH-4794](https://redhat.atlassian.net/browse/FLPATH-4794) |
 | **Author** | Thomas Stetson |
-| **Version** | 1.0 |
-| **Last Updated** | 2026-08-17 |
+| **Version** | 1.1 |
+| **Last Updated** | 2026-08-18 |
 | **Status** | Draft |
 
 ## Description
@@ -39,12 +39,16 @@ Contract tests validate that:
 
 ### Acceptance Criteria
 
-1. A CI workflow validates that the CLI can create catalog items and instances
-   against a real control-plane — failing if required fields are missing or
-   silently dropped
-2. Documented Getting Started YAML examples are validated against the current
-   API schema on every PR that changes them
-3. CLI dependency staleness is detected before it causes silent data loss
+(Numbered to match [FLPATH-4794](https://redhat.atlassian.net/browse/FLPATH-4794))
+
+1. CLI repo CI includes a static contract test that fails if documented YAML
+   examples cannot round-trip through `parseInputFileAs` without data loss
+   → **TC-01, TC-02**
+2. A subsystem-level test validates the CLI binary can create catalog items and
+   instances against a real control-plane (reusing existing compose
+   infrastructure) → **TC-03, TC-04**
+3. A scheduled workflow alerts when the CLI `control-plane` dependency is more
+   than 2 weeks stale → **TC-05**
 
 ---
 
@@ -66,7 +70,11 @@ compose stack** (`test/subsystem/catalog/docker-compose.yaml`), which provides:
 
 - Postgres (port 5432) — real database
 - Control-plane (port 28080) — real binary with auth disabled, NATS disabled
-- WireMock (port 28081) — mocks placement-manager (accepts all create requests)
+- WireMock (port 28081) — placement-manager mock (starts with no mappings)
+
+**Important:** WireMock boots empty. The Ginkgo subsystem tests call
+`stubPMCreateResource()` in `BeforeEach` to register mappings via its admin
+API. CLI contract tests must do the same via `curl` before creating instances.
 
 This is the lightest possible real-API configuration (~15s startup, no
 external cluster needed).
@@ -83,6 +91,22 @@ make catalog-subsystem-test-up
 
 # Verify health
 curl -sf http://localhost:28080/api/v1alpha1/health
+
+# Stub placement-manager in WireMock (required for instance creation)
+curl -s -X POST http://localhost:28081/__admin/mappings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request": {"method": "POST", "urlPath": "/api/v1alpha1/runs"},
+    "response": {
+      "status": 202,
+      "headers": {"Content-Type": "application/json"},
+      "jsonBody": {
+        "run_id": "contract-run-1",
+        "catalog_item_instance_id": "ignored",
+        "resources": [{"id": "r-1", "name": "main", "path": "resources/r-1", "spec": {}}]
+      }
+    }
+  }'
 ```
 
 ---
@@ -145,10 +169,17 @@ Go types lacked the `Resources` field, so `json.Unmarshal` silently dropped it.
 
 **Step 1: Parse the documented catalog item YAML through CLI's conversion path**
 
+The CLI calls `parseInputFileAs[catalogapi.CreateCatalogItemJSONRequestBody]`
+which is the exact type that lost the `Resources` field in FLPATH-4770.
+
 ```go
 // In internal/commands/contract_test.go
+import catalogapi "github.com/dcm-project/control-plane/api/catalog/v1alpha1"
+
 func TestDocCatalogItemPreservesResources(t *testing.T) {
-    ci, err := parseInputFileAs[CatalogItemFile]("testdata/docs/small-vm.yaml")
+    ci, err := parseInputFileAs[catalogapi.CreateCatalogItemJSONRequestBody](
+        "testdata/docs/small-vm.yaml",
+    )
     require.NoError(t, err)
 
     // The critical assertion: resources field is populated
@@ -198,9 +229,14 @@ and is now required by the API.
 
 **Step 1: Parse the documented instance YAML**
 
+The CLI calls
+`parseInputFileAs[catalogapi.CreateCatalogItemInstanceJSONRequestBody]`.
+
 ```go
 func TestDocInstancePreservesResourceField(t *testing.T) {
-    inst, err := parseInputFileAs[InstanceFile]("testdata/docs/my-vm.yaml")
+    inst, err := parseInputFileAs[catalogapi.CreateCatalogItemInstanceJSONRequestBody](
+        "testdata/docs/my-vm.yaml",
+    )
     require.NoError(t, err)
 
     require.NotEmpty(t, inst.Spec.UserValues)
@@ -220,7 +256,7 @@ None.
 
 ---
 
-### TC-03: CLI creates catalog item against real control-plane (subsystem)
+### TC-03: CLI catalog item and instance lifecycle against real control-plane
 
 **Priority:** P1 (critical)
 **Type:** Functional
@@ -230,15 +266,21 @@ None.
 
 #### Description
 
-Builds the CLI from source and exercises the full Getting Started catalog item
-creation against a real control-plane instance. This would have caught
-FLPATH-4770 because the API returns HTTP 400 when `spec.resources` is missing.
+Builds the CLI from source and exercises the full Getting Started journey
+(create catalog item → create instance) against a real control-plane. This
+would have caught FLPATH-4770 because the API returns HTTP 400 when
+`spec.resources` is missing or `user_values[].resource` is absent.
+
+The test uses `small-vm` as the catalog item ID to match the fixture YAML's
+`catalog_item_id` reference, ensuring the documented examples work as-is
+without modification.
 
 #### Prerequisites
 
 - Catalog-subsystem compose stack running (port 28080)
-- WireMock configured to accept placement-manager requests
+- WireMock configured to accept placement-manager requests (default in compose)
 - CLI built from source (`go build -o /tmp/dcm ./cmd/dcm`)
+- Fixture YAMLs in `testdata/docs/` (byte-for-byte copies of website examples)
 
 #### Steps
 
@@ -247,77 +289,40 @@ FLPATH-4770 because the API returns HTTP 400 when `spec.resources` is missing.
 ```bash
 /tmp/dcm catalog item create \
   --from-file testdata/docs/small-vm.yaml \
-  --id contract-test-item \
+  --id small-vm \
   --control-plane-url http://localhost:28080
 ```
 
-**Expected:** Exit code 0. Table output showing `UID=contract-test-item`,
+**Expected:** Exit code 0. Table output showing `UID=small-vm`,
 `SERVICE TYPE=vm`.
 
-**Step 2: Verify the item via GET**
+**Step 2: Verify via raw API that resources are stored correctly**
 
 ```bash
-/tmp/dcm catalog item get contract-test-item \
-  --control-plane-url http://localhost:28080
-```
-
-**Expected:** Exit code 0. Output shows the catalog item with correct fields.
-
-**Step 3: Verify via raw API that resources are stored correctly**
-
-```bash
-curl -s http://localhost:28080/api/v1alpha1/catalog-items/contract-test-item | \
+curl -s http://localhost:28080/api/v1alpha1/catalog-items/small-vm | \
   jq '.spec.resources[0].name'
 ```
 
 **Expected:** Output is `"main"`.
 
-#### Cleanup
+**Step 3: Create an instance using the documented YAML**
 
-```bash
-/tmp/dcm catalog item delete contract-test-item \
-  --control-plane-url http://localhost:28080
-```
-
----
-
-### TC-04: CLI creates catalog item instance against real control-plane
-
-**Priority:** P1 (critical)
-**Type:** Functional
-**Method:** Automated (subsystem — control-plane compose stack)
-**Labels:** `contract`, `subsystem`
-**Requires:** TC-03 (catalog item exists)
-
-#### Description
-
-Validates the full instance creation path including the `user_values[].resource`
-field. The API returns HTTP 400 if `resource` is missing from any user_value
-entry.
-
-#### Prerequisites
-
-- Catalog item `contract-test-item` exists (TC-03)
-- WireMock stub for placement-manager returns 202 (already configured by
-  compose stack)
-
-#### Steps
-
-**Step 1: Create an instance using the documented YAML**
+The fixture `my-vm.yaml` references `catalog_item_id: small-vm`, which must
+match the item created in Step 1.
 
 ```bash
 /tmp/dcm catalog instance create \
   --from-file testdata/docs/my-vm.yaml \
-  --id contract-test-instance \
+  --id my-dev-vm \
   --control-plane-url http://localhost:28080
 ```
 
-**Expected:** Exit code 0. Table output showing `UID=contract-test-instance`.
+**Expected:** Exit code 0. Table output showing `UID=my-dev-vm`.
 
-**Step 2: Verify via raw API that user_values have resource field**
+**Step 4: Verify via raw API that user_values have resource field**
 
 ```bash
-curl -s http://localhost:28080/api/v1alpha1/catalog-item-instances/contract-test-instance | \
+curl -s http://localhost:28080/api/v1alpha1/catalog-item-instances/my-dev-vm | \
   jq '.spec.user_values[0].resource'
 ```
 
@@ -325,15 +330,18 @@ curl -s http://localhost:28080/api/v1alpha1/catalog-item-instances/contract-test
 
 #### Cleanup
 
+Instance must be deleted before the catalog item (API enforces referential
+integrity — returns 409 if instances still reference the item).
+
 ```bash
-curl -s -X DELETE http://localhost:28080/api/v1alpha1/catalog-item-instances/contract-test-instance
-/tmp/dcm catalog item delete contract-test-item \
+curl -s -X DELETE http://localhost:28080/api/v1alpha1/catalog-item-instances/my-dev-vm
+/tmp/dcm catalog item delete small-vm \
   --control-plane-url http://localhost:28080
 ```
 
 ---
 
-### TC-05: CLI fails gracefully when API rejects malformed payload
+### TC-04: CLI fails gracefully when API rejects malformed payload
 
 **Priority:** P2 (important)
 **Type:** Negative
@@ -386,7 +394,7 @@ None (creation should fail).
 
 ---
 
-### TC-06: Dependency freshness check detects stale control-plane pin
+### TC-05: Dependency freshness check detects stale control-plane pin
 
 **Priority:** P2 (important)
 **Type:** Functional
@@ -410,17 +418,62 @@ echo "Current: $CURRENT"
 echo "Latest:  $LATEST"
 ```
 
-**Step 2: Compare timestamps**
+**Step 2: Extract timestamps and compute age**
+
+Pseudo-versions use format `v0.0.0-YYYYMMDDHHMMSS-commithash`. Tagged versions
+(e.g., `v0.1.0`) do not embed a timestamp and should be resolved via `go list`
+to get the commit time.
 
 ```bash
-# Extract date from pseudo-version (format: v0.0.0-YYYYMMDDHHMMSS-hash)
-current_date=$(echo "$CURRENT" | grep -oP '\d{14}' | head -1)
-latest_date=$(echo "$LATEST" | grep -oP '\d{14}' | head -1)
-# Alert if difference > 14 days
+extract_epoch() {
+  local version="$1"
+  local ts
+  ts=$(echo "$version" | grep -oE '[0-9]{14}')
+  if [ -z "$ts" ]; then
+    # Tagged version — resolve commit time via go list
+    ts=$(go list -m -json "github.com/dcm-project/control-plane@${version}" 2>/dev/null \
+      | jq -r '.Time // empty' | cut -dT -f1 | tr -d '-')
+    ts="${ts}000000"
+  fi
+  if [ -z "$ts" ]; then
+    echo "0"
+    return
+  fi
+  # Convert YYYYMMDDHHMMSS to epoch seconds
+  date -jf "%Y%m%d%H%M%S" "$ts" "+%s" 2>/dev/null || \
+    date -d "${ts:0:8} ${ts:8:2}:${ts:10:2}:${ts:12:2}" "+%s" 2>/dev/null || \
+    echo "0"
+}
+
+current_epoch=$(extract_epoch "$CURRENT")
+latest_epoch=$(extract_epoch "$LATEST")
 ```
 
-**Expected:** If the dependency is fresh (≤14 days), no alert. If stale,
-the workflow emits `::warning` or opens a GitHub issue.
+**Step 3: Alert if stale**
+
+```bash
+if [ "$current_epoch" -eq 0 ] || [ "$latest_epoch" -eq 0 ]; then
+  echo "::warning::Could not parse dependency version timestamps"
+  exit 0
+fi
+
+age_days=$(( (latest_epoch - current_epoch) / 86400 ))
+echo "Dependency age: ${age_days} days behind main"
+
+if [ "$age_days" -gt 14 ]; then
+  echo "::warning::control-plane dependency is ${age_days} days stale (have ${CURRENT}, latest ${LATEST})"
+  # Optionally open an issue:
+  # gh issue create --title "CLI: control-plane dep is ${age_days} days stale" \
+  #   --body "Current: ${CURRENT}\nLatest: ${LATEST}" --label "dependency"
+  exit 1
+fi
+
+echo "Dependency is fresh (${age_days} days)"
+```
+
+**Expected:** If the dependency is fresh (≤14 days behind `@main`), the step
+passes silently. If stale (>14 days), the workflow emits a `::warning`
+annotation and exits non-zero, failing the scheduled check.
 
 #### Cleanup
 
@@ -475,11 +528,11 @@ diff <(sed -n '/^```yaml$/,/^```$/p' content/docs/.../create-small-vm-catalog-it
 
 ## Coverage Summary
 
-| Acceptance Criteria | Static (TC-01/02) | Subsystem (TC-03/04/05) | CI Alert (TC-06) |
+| Jira AC | Static (TC-01/02) | Subsystem (TC-03/04) | CI Alert (TC-05) |
 |--------------------|--------------------|--------------------------|-------------------|
-| 1. CLI creates against real API | — | TC-03, TC-04 | — |
-| 2. Doc examples validated | TC-01, TC-02 | TC-03, TC-04 | — |
-| 3. Staleness detection | — | — | TC-06 |
+| 1. Static round-trip without data loss | TC-01, TC-02 | — | — |
+| 2. CLI binary → real API acceptance | — | TC-03, TC-04 | — |
+| 3. Staleness detection | — | — | TC-05 |
 
 ---
 
@@ -512,7 +565,8 @@ diff <(sed -n '/^```yaml$/,/^```$/p' content/docs/.../create-small-vm-catalog-it
 
 | Version | Date | Changes |
 |---|---|---|
-| 1.0 | 2026-08-17 | Initial test plan: 6 test cases covering static serialization, subsystem integration, negative scenarios, and dependency freshness |
+| 1.1 | 2026-08-18 | Merged TC-03/04 into single lifecycle test (fixture ID alignment), renumbered TC-05→04 and TC-06→05, completed TC-05 freshness procedure, fixed CLI subcommand references |
+| 1.0 | 2026-08-17 | Initial test plan: 5 test cases covering static serialization, subsystem integration, negative scenarios, and dependency freshness |
 
 ---
 
