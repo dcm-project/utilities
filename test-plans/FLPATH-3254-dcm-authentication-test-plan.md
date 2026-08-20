@@ -540,7 +540,7 @@ curl -s -w '\nHTTP %{http_code}\n' -X POST -H "Authorization: Bearer $TOKEN" -H 
   http://localhost:8080/api/v1alpha1/agents
 ```
 
-**Expected:** HTTP 201 with agent JSON including `agent_id`.
+**Expected:** HTTP 201 (first run) or HTTP 200 (re-run — registration is idempotent by name). Response includes `agent_id`.
 
 **Step 3: List agents**
 
@@ -580,7 +580,13 @@ curl -s -o /dev/null -w 'HTTP %{http_code}\n' -X POST -H 'Content-Type: applicat
 
 #### Cleanup
 
-No DELETE endpoint for agents. Test agent remains in DB; subsystem tests use a fresh Postgres volume per run.
+No DELETE endpoint for agents (FK constraints preserve resource→agent history). For manual testers:
+
+```bash
+PGPASSWORD=<POSTGRES_PASSWORD> psql -h localhost -U <POSTGRES_USER> -d control-plane -c "DELETE FROM agents WHERE name LIKE 'tc08-crud-%';"
+```
+
+Alternatively, `make compose-down -v` destroys the Postgres volume and all data.
 
 ---
 
@@ -1761,7 +1767,7 @@ SCHEME="http"
 curl -sk -X POST "$SCHEME://$CP_URL/api/v1alpha1/agents" -H 'Content-Type: application/json' -d '{"name":"helm-smoke-agent","environment":"test","service_types":["vm"],"cost":"low","topic_name":"dcm.agent.helm-smoke-agent"}' -w '\nHTTP %{http_code}\n'
 ```
 
-**Expected:** HTTP 201 with the created agent JSON including an `agent_id` field.
+**Expected:** HTTP 201 (first run) or HTTP 200 (re-run — registration is idempotent by name). Response includes `agent_id`.
 
 **Step 3: List agents**
 
@@ -2031,7 +2037,7 @@ TOKEN=$(curl -s -d 'grant_type=password&client_id=dcm-proxy&client_secret=<DCM_P
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1alpha1/agents | jq '.agents[] | {name, health_status}'
 ```
 
-**Expected:** Registered SPs report ready/healthy via `health_status` (or documented known-unhealthy exceptions such as ACM SP GVK scheme issues tracked separately).
+**Expected:** Registered agents report ready/healthy via `health_status` (or documented known-unhealthy exceptions such as ACM SP GVK scheme issues tracked separately).
 
 **Step 2: SP container logs show no repeated 401 to control-plane**
 
