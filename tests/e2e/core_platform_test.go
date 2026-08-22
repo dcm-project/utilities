@@ -61,7 +61,10 @@ var _ = Describe("Core Platform", Label("core", "platform"), func() {
 		})
 
 		It("discovers the container agent", func() {
-			override := os.Getenv("DCM_CONTAINER_PROVIDER_NAME")
+			override := os.Getenv("DCM_CONTAINER_AGENT_NAME")
+			if override == "" {
+				override = os.Getenv("DCM_CONTAINER_PROVIDER_NAME")
+			}
 			containerProviderName = discoverAgentByServiceType("container", override)
 			GinkgoWriter.Printf("Selected container agent: %s\n", containerProviderName)
 		})

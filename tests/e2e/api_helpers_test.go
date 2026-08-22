@@ -163,10 +163,13 @@ func waitForNewServiceTypeInstanceIDs(before map[string]struct{}, n int, timeout
 func discoverAgentByServiceType(serviceType, overrideName string) string {
 	resp, err := doRequest(http.MethodGet, "/agents", "")
 	Expect(err).NotTo(HaveOccurred())
+	defer resp.Body.Close()
 	Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
 	var body map[string]interface{}
-	decodeJSON(resp, &body)
+	data, err := io.ReadAll(resp.Body)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(json.Unmarshal(data, &body)).To(Succeed())
 	agents, ok := body["agents"].([]interface{})
 	Expect(ok).To(BeTrue(), "expected agents array in response")
 

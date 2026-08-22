@@ -14,11 +14,7 @@ import (
 
 // Skipped: the DCM CLI has not been updated for the /providers → /agents migration.
 // Re-enable once the CLI supports `dcm agent` commands (see FLPATH-XXXX).
-var _ = Describe("CLI: sp provider commands", Label("cli"), func() {
-	BeforeEach(func() {
-		Skip("CLI not yet updated for /providers → /agents migration")
-	})
-
+var _ = PDescribe("CLI: sp provider commands", Label("cli"), func() {
 	Context("read operations", Ordered, func() {
 		var providerID string
 		providerName := fmt.Sprintf("e2e-cli-provider-%d", time.Now().UnixNano())
