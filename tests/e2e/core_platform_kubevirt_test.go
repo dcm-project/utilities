@@ -260,6 +260,7 @@ var _ = Describe("Core Platform - KubeVirt Provider", Label("core", "platform", 
 				}
 			}`, instanceDisplayName, catalogItemID, instanceDisplayName)
 
+			beforeSTIs := listServiceTypeInstanceIDs()
 			resp, err := doRequest(http.MethodPost, "/catalog-item-instances", payload)
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
@@ -268,14 +269,10 @@ var _ = Describe("Core Platform - KubeVirt Provider", Label("core", "platform", 
 			var body map[string]interface{}
 			decodeJSON(resp, &body)
 			instanceID, _ = body["uid"].(string)
+			Expect(instanceID).NotTo(BeEmpty())
 
-			spec, ok := body["spec"].(map[string]interface{})
-			Expect(ok).To(BeTrue())
-			ids, ok := spec["resource_ids"].([]interface{})
-			Expect(ok).To(BeTrue())
-			Expect(ids).To(HaveLen(1))
-			resourceID, _ = ids[0].(string)
-			Expect(resourceID).NotTo(BeEmpty())
+			resourceID = resolveResourceIDAfterCreate(body, beforeSTIs)
+			Expect(resourceID).NotTo(BeEmpty(), "placement resource ID should be discoverable after create")
 		})
 
 		It("VM reaches Running status on STI and cluster [TC-23]", func() {
