@@ -156,6 +156,41 @@ func waitForNewServiceTypeInstanceIDs(before map[string]struct{}, n int, timeout
 	return found
 }
 
+// discoverAgentByServiceType queries GET /agents and returns the name of the
+// first agent whose service_types list contains serviceType. An optional
+// overrideName restricts the match to that exact agent name.
+// Fails the current test if no matching agent is found.
+func discoverAgentByServiceType(serviceType, overrideName string) string {
+	resp, err := doRequest(http.MethodGet, "/agents", "")
+	Expect(err).NotTo(HaveOccurred())
+	Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+	var body map[string]interface{}
+	decodeJSON(resp, &body)
+	agents, ok := body["agents"].([]interface{})
+	Expect(ok).To(BeTrue(), "expected agents array in response")
+
+	for _, raw := range agents {
+		agent, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := agent["name"].(string)
+		if overrideName != "" && name != overrideName {
+			continue
+		}
+		serviceTypes, _ := agent["service_types"].([]interface{})
+		for _, st := range serviceTypes {
+			if s, _ := st.(string); s == serviceType {
+				return name
+			}
+		}
+	}
+
+	Fail(fmt.Sprintf("no agent with service_types containing %q found (override=%q)", serviceType, overrideName))
+	return ""
+}
+
 // legacyResourceIDsFromSpec returns spec.resource_ids when present (pre-#39 API).
 func legacyResourceIDsFromSpec(body map[string]interface{}) []string {
 	spec, ok := body["spec"].(map[string]interface{})
