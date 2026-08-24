@@ -12,7 +12,10 @@ import (
 )
 
 var _ = Describe("Agents API", func() {
-	Context("CRUD lifecycle", Ordered, func() {
+	// No AfterAll cleanup: the agents API has no DELETE endpoint — agents
+	// auto-deregister via heartbeat timeout. We use a synthetic service type
+	// ("e2e-test-type") so stale agents never interfere with real discovery.
+	Context("registration lifecycle", Ordered, func() {
 		var agentID string
 		agentName := fmt.Sprintf("e2e-test-agent-%d", time.Now().UnixNano())
 
@@ -21,7 +24,7 @@ var _ = Describe("Agents API", func() {
 				"name": %q,
 				"environment": "e2e-test",
 				"topic_name": "dcm.agent.%s",
-				"service_types": ["vm"],
+				"service_types": ["e2e-test-type"],
 				"cost": "low"
 			}`, agentName, agentName)
 
@@ -86,7 +89,7 @@ var _ = Describe("Agents API", func() {
 				"name": %q,
 				"environment": "e2e-test-updated",
 				"topic_name": "dcm.agent.%s",
-				"service_types": ["vm", "container"],
+				"service_types": ["e2e-test-type", "e2e-test-type-2"],
 				"cost": "medium"
 			}`, agentName, agentName)
 
