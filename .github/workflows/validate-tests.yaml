@@ -29,3 +29,6 @@ jobs:
 
       - name: Compile check
         run: go test --tags=e2e -c -o /dev/null .
+
+      - name: Unit test (non-e2e packages)
+        run: go test ./internal/...

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dcm-project/utilities/tests/e2e/internal/resolve"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -257,7 +258,7 @@ func firstResourceID(body map[string]interface{}) string {
 	if v, ok := body["__e2e_resource_id"].(string); ok && v != "" {
 		return v
 	}
-	if ids := legacyResourceIDsFromSpec(body); len(ids) > 0 {
+	if ids := resolve.LegacyResourceIDs(body); len(ids) > 0 {
 		return ids[0]
 	}
 	if runID := stringField(body, "run_id"); runID != "" {
@@ -392,7 +393,7 @@ func parseCatalogItemInstance(resp *http.Response) CatalogItemInstance {
 	}
 	if spec, ok := raw["spec"].(map[string]interface{}); ok {
 		inst.Spec = spec
-		if ids := legacyResourceIDsFromSpec(raw); len(ids) > 0 {
+		if ids := resolve.LegacyResourceIDs(raw); len(ids) > 0 {
 			inst.ResourceID = ids[0]
 		}
 	}
