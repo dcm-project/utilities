@@ -40,6 +40,16 @@ func LegacyResourceIDs(body map[string]interface{}) []string {
 // candidate would risk a flaky, non-deterministic result, so callers must
 // treat ambiguity as an error rather than guessing (see PR #39 review
 // discussion / FLPATH-4809).
+//
+// Two edge cases worth calling out explicitly (unreachable from today's only
+// caller, which sources ids from a set's keys, but this is an exported,
+// general-purpose function so future callers may hit them):
+//   - Duplicates are NOT deduplicated: ids containing the same value twice
+//     (e.g. []string{"a", "a"}) has len 2 and is treated as ambiguous, same
+//     as any other multi-element input.
+//   - An empty string is a valid candidate like any other: []string{""} has
+//     len 1 and returns ("", nil). Callers that want to treat "" as "no
+//     candidate" must filter it out before calling Unique.
 func Unique(ids []string) (string, error) {
 	switch len(ids) {
 	case 0:

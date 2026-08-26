@@ -21,7 +21,7 @@ Files follow `{layer}_{subject}_test.go` with a matching `{layer}_helpers_test.g
 When adding a new service provider, add `sp_{provider}_{concern}_test.go` (e.g. `sp_kubevirt_api_test.go`). Each provider gets its own helpers file (`sp_{provider}_helpers_test.go`). Shared infrastructure (kubectl, podman, NATS collector) stays in `sp_helpers_test.go`.
 
 ## Go Conventions
-- All files start with `//go:build e2e` and `package e2e_test`
+- All files start with `//go:build e2e` and `package e2e_test`, **except** `tests/e2e/internal/*` packages (e.g. `internal/resolve`) — those hold pure, non-network logic extracted for real unit-test coverage (no build tag, no Ginkgo/Gomega, `go test ./internal/...` actually executes in CI). See `internal/resolve/resolve.go`'s package doc for the rationale.
 - Dot-import Ginkgo and Gomega: `. "github.com/onsi/ginkgo/v2"`
 - Use Ginkgo labels for selective runs: `Label("sp", "container")`, `Label("sp", "acm-cluster")`, `Label("core", "platform")`, `Label("cli")`, `Label("smoke")`, `Label("cluster")`, `Label("disruptive")`
 - Ordered contexts need `AfterAll` cleanup; standalone tests use `BeforeEach`/`AfterEach`

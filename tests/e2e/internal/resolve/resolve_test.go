@@ -22,6 +22,19 @@ func TestLegacyResourceIDs(t *testing.T) {
 			want: nil,
 		},
 		{
+			// Distinct from "spec without resource_ids": here the key is
+			// present but holds the wrong type — a malformed-response shape
+			// from the control-plane API, not just a missing field. Hits the
+			// same `ok=false` branch today, but is worth pinning separately
+			// since this package's job is guarding against exactly this kind
+			// of untrusted-input variance.
+			name: "resource_ids present with wrong type (string, not array)",
+			body: map[string]interface{}{
+				"spec": map[string]interface{}{"resource_ids": "not-an-array"},
+			},
+			want: nil,
+		},
+		{
 			name: "empty resource_ids",
 			body: map[string]interface{}{
 				"spec": map[string]interface{}{"resource_ids": []interface{}{}},
@@ -98,6 +111,23 @@ func TestUnique(t *testing.T) {
 			name:    "ambiguous - many candidates",
 			ids:     []string{"sti-1", "sti-2", "sti-3"},
 			wantErr: true,
+		},
+		{
+			// Unreachable from today's only caller (ids come from a set's
+			// keys, which can't contain duplicates), but pins the contract
+			// for future callers: duplicates are NOT deduplicated, so this
+			// is treated as ambiguous like any other 2-element input.
+			name:    "duplicate values are ambiguous, not deduplicated",
+			ids:     []string{"sti-1", "sti-1"},
+			wantErr: true,
+		},
+		{
+			// Unreachable from today's only caller (listServiceTypeInstanceIDs
+			// never inserts an empty string), but pins the contract: an empty
+			// string is a valid single candidate like any other value.
+			name: "empty string is a valid single candidate",
+			ids:  []string{""},
+			want: "",
 		},
 	}
 

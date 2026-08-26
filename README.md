@@ -148,6 +148,14 @@ The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained
 ./tests/run-e2e.sh --skip-deploy --label-filter "sp && acm-cluster"
 ```
 
+### Unit Tests
+
+Pure, non-network logic (e.g. `tests/e2e/internal/resolve`) lives outside the `e2e` build tag so it gets real, fast test coverage instead of only being exercised against a live stack:
+
+```bash
+cd tests/e2e && go test ./internal/...
+```
+
 ## Cursor Integration
 
 This repo includes configuration for [Cursor](https://cursor.sh) and [Claude Code](https://claude.ai/code):
