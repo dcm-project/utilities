@@ -125,6 +125,8 @@ tests/
   compose-acm-cluster-sp.yaml        # Compose override: adds ACM cluster SP service (auto-injected by provider registry)
   e2e/
     go.mod                            # Standalone Go module
+    internal/resolve/                 # Plain Go package (no e2e build tag): pure STI-resolution
+                                       # logic with real go test unit coverage — see Conventions below
     suite_test.go                     # Ginkgo bootstrap
     api_helpers_test.go               # HTTP helpers, env config, BeforeSuite connectivity check
     cli_helpers_test.go               # CLI binary execution helper (runDCM)
@@ -198,7 +200,7 @@ CLI tests are skipped (not failed) if no binary is available.
 
 ### Conventions
 
-- All test files use `//go:build e2e` build tag
+- All test files use `//go:build e2e` build tag, **except** `tests/e2e/internal/*` packages (e.g. `internal/resolve`), which hold pure, non-network logic with no `e2e` tag and real unit-test coverage. CI runs `go test ./internal/...` (unlike the e2e-tagged suite, which CI only vets/compiles — see `validate-tests.yaml`)
 - API tests use raw `net/http` (no generated clients) for independence from service repos
 - CLI tests use `os/exec` to run the actual binary (not in-process Cobra)
 - `DCM_GATEWAY_URL` env var overrides the control plane API endpoint (default: `http://localhost:8080/api/v1alpha1`)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dcm-project/utilities/tests/e2e/internal/resolve"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -214,34 +215,19 @@ func discoverAgentByServiceType(serviceType, overrideName string) string {
 	return ""
 }
 
-// legacyResourceIDsFromSpec returns spec.resource_ids when present (pre-#39 API).
-func legacyResourceIDsFromSpec(body map[string]interface{}) []string {
-	spec, ok := body["spec"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	raw, ok := spec["resource_ids"].([]interface{})
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, v := range raw {
-		s, _ := v.(string)
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 // resolveResourceIDAfterCreate returns the primary placement resource ID for a
 // catalog-item-instance create/rehydrate response.
 //
 // Breaking change: control-plane#39 removed spec.resource_ids and added run_id.
 // When resource_ids are absent, newly appeared service-type-instance IDs
 // (relative to before) are treated as the placement resource IDs.
+//
+// The disambiguation logic itself (legacy extraction, single-candidate
+// selection) is pure and lives in internal/resolve, where it has real unit
+// test coverage (see FLPATH-4809) — this function is just the e2e glue that
+// gathers candidates over the network and fails the spec on error.
 func resolveResourceIDAfterCreate(body map[string]interface{}, before map[string]struct{}) string {
-	if ids := legacyResourceIDsFromSpec(body); len(ids) > 0 {
+	if ids := resolve.LegacyResourceIDs(body); len(ids) > 0 {
 		if runID, _ := body["run_id"].(string); runID != "" {
 			runResourceIDCache[runID] = ids[0]
 		}
@@ -253,14 +239,9 @@ func resolveResourceIDAfterCreate(body map[string]interface{}, before map[string
 		"catalog-item-instance response missing run_id and spec.resource_ids")
 
 	ids := waitForNewServiceTypeInstanceIDs(before, 1, 60*time.Second)
-	// ids comes from a map iteration (see listServiceTypeInstanceIDs), so its
-	// order is not deterministic. Picking ids[0] is only safe when exactly one
-	// new STI appeared; if more than one shows up we have no reliable way to
-	// tell which one corresponds to this create call, so fail loudly instead
-	// of silently returning a random one (see PR #39 review discussion).
-	Expect(ids).To(HaveLen(1),
-		"expected exactly one new service-type-instance after create (run_id=%s), got %d: %v",
-		runID, len(ids), ids)
-	runResourceIDCache[runID] = ids[0]
-	return ids[0]
+	id, err := resolve.Unique(ids)
+	Expect(err).NotTo(HaveOccurred(),
+		"could not resolve placement resource ID after create (run_id=%s)", runID)
+	runResourceIDCache[runID] = id
+	return id
 }
