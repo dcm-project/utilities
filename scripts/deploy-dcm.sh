@@ -145,6 +145,7 @@ EOF
   --cluster-username USER        Username for oc login (default: kubeadmin)
   --cluster-password PASS        Password for oc login
   --compose-file PATH            Additional compose file to merge (repeatable, e.g. port overrides)
+  --auth-enabled                 Enable authentication (Keycloak + JWT validation; adds compose profile auth)
   --cleanup-on-failure           Tear down the stack automatically if deployment fails (default: leave for debugging)
   --running-versions             Print versions of all running containers and write dcm-versions.json
   --tear-down                    Stop the stack, remove volumes, and clean the deploy directory
@@ -165,6 +166,7 @@ Environment variables (flags take precedence):
   OPENSHIFT_API             Same as --cluster-api
   OPENSHIFT_USERNAME        Same as --cluster-username (default: kubeadmin)
   OPENSHIFT_PASSWORD        Same as --cluster-password
+  AUTH_DISABLED             Set to 'false' to enable auth (same effect as --auth-enabled)
 EOF
 
     # Provider namespace env vars (generated from registry)
@@ -189,6 +191,7 @@ Examples:
   $(basename "$0") --k8s-storage-service-provider --kubeconfig ~/.kube/config
   $(basename "$0") --all-service-providers --cluster-api https://api.cluster.example.com --cluster-password secret
   $(basename "$0") --acm-cluster-service-provider --deploy-acm --kubeconfig ~/.kube/config
+  $(basename "$0") --auth-enabled
   $(basename "$0") --tear-down
   $(basename "$0") --running-versions
 EOF
@@ -605,6 +608,89 @@ resolve_provider_cli() {
     esac
 }
 
+# --- Compose credential bootstrap ------------------------------------------ #
+#
+# control-plane deploy/compose.yaml reads credentials from deploy/.env
+# (see control-plane deploy/.env.example). Bootstrap that file after clone.
+
+env_or_default() {
+    local var_name="$1"
+    local default_value="$2"
+    if [[ -n "${!var_name:-}" ]]; then
+        echo "${!var_name}"
+    else
+        echo "${default_value}"
+    fi
+}
+
+upsert_deploy_env_var() {
+    local deploy_dir="$1"
+    local key="$2"
+    local value="$3"
+    local env_file="${deploy_dir}/deploy/.env"
+    local tmp
+
+    [[ -n "${value}" ]] || return 0
+
+    tmp="$(mktemp)"
+    if [[ -f "${env_file}" ]]; then
+        grep -v "^${key}=" "${env_file}" > "${tmp}" || true
+    fi
+    printf '%s=%s\n' "${key}" "${value}" >> "${tmp}"
+    mv "${tmp}" "${env_file}"
+}
+
+ensure_deploy_env() {
+    local deploy_dir="$1"
+    local env_file="${deploy_dir}/deploy/.env"
+    local env_example="${deploy_dir}/deploy/.env.example"
+    local var
+
+    if [[ ! -f "${env_file}" ]]; then
+        if [[ ! -f "${env_example}" ]]; then
+            err "Missing ${env_example} — cannot bootstrap deploy credentials"
+            return 1
+        fi
+        cp "${env_example}" "${env_file}"
+        info "Created ${env_file} from .env.example"
+    fi
+
+    upsert_deploy_env_var "${deploy_dir}" "POSTGRES_USER" "$(env_or_default POSTGRES_USER admin)"
+    upsert_deploy_env_var "${deploy_dir}" "POSTGRES_PASSWORD" "$(env_or_default POSTGRES_PASSWORD adminpass)"
+    upsert_deploy_env_var "${deploy_dir}" "DB_USER" "$(env_or_default DB_USER admin)"
+    upsert_deploy_env_var "${deploy_dir}" "DB_PASS" "$(env_or_default DB_PASS adminpass)"
+    upsert_deploy_env_var "${deploy_dir}" "DB_PASSWORD" "$(env_or_default DB_PASSWORD adminpass)"
+
+    if [[ "${AUTH_ENABLED}" == true ]]; then
+        upsert_deploy_env_var "${deploy_dir}" "KEYCLOAK_ADMIN" "$(env_or_default KEYCLOAK_ADMIN admin)"
+        upsert_deploy_env_var "${deploy_dir}" "KEYCLOAK_ADMIN_PASSWORD" "$(env_or_default KEYCLOAK_ADMIN_PASSWORD admin)"
+        upsert_deploy_env_var "${deploy_dir}" "DCM_DEV_USER_PASSWORD" "$(env_or_default DCM_DEV_USER_PASSWORD admin)"
+        upsert_deploy_env_var "${deploy_dir}" "AUTH_PROXY_SECRET" "$(env_or_default AUTH_PROXY_SECRET dcm-dev-proxy-secret)"
+        upsert_deploy_env_var "${deploy_dir}" "AUTH_DISABLED" "false"
+        upsert_deploy_env_var "${deploy_dir}" "AUTH_ISSUER_URL" "$(env_or_default AUTH_ISSUER_URL http://keycloak:8080/realms/dcm)"
+        upsert_deploy_env_var "${deploy_dir}" "AUTH_JWT_AUDIENCE" "$(env_or_default AUTH_JWT_AUDIENCE dcm-api)"
+        upsert_deploy_env_var "${deploy_dir}" "DCM_ADMIN_SUBJECT" "$(env_or_default DCM_ADMIN_SUBJECT 56deb662-4820-5d83-b828-f4beb11a5fa7)"
+    else
+        upsert_deploy_env_var "${deploy_dir}" "AUTH_DISABLED" "true"
+    fi
+
+    if [[ -n "${DCM_VERSION:-}" ]]; then
+        for var in "${VERSION_ENV_VARS[@]}"; do
+            upsert_deploy_env_var "${deploy_dir}" "${var}" "${DCM_VERSION}"
+        done
+    else
+        for var in "${VERSION_ENV_VARS[@]}"; do
+            if [[ -n "${!var:-}" ]]; then
+                upsert_deploy_env_var "${deploy_dir}" "${var}" "${!var}"
+            fi
+        done
+    fi
+
+    if [[ -n "${ACM_CLUSTER_SP_PULL_SECRET:-}" ]]; then
+        upsert_deploy_env_var "${deploy_dir}" "ACM_CLUSTER_SP_PULL_SECRET" "${ACM_CLUSTER_SP_PULL_SECRET}"
+    fi
+}
+
 # Collect compose args (profiles and overrides) for an enabled provider.
 collect_provider_compose() {
     local i="$1"
@@ -645,6 +731,7 @@ DCM_KUBECONFIG="${KUBECONFIG:-}"
 OPENSHIFT_API="${OPENSHIFT_API:-}"
 OPENSHIFT_USERNAME="${OPENSHIFT_USERNAME:-kubeadmin}"
 OPENSHIFT_PASSWORD="${OPENSHIFT_PASSWORD:-}"
+AUTH_ENABLED_EXPLICIT=false
 COMPOSE_EXTRA_FILE_ARGS=()
 
 require_arg() {
@@ -727,6 +814,8 @@ while [[ $# -gt 0 ]]; do
             require_arg "$1" "${2:-}"
             COMPOSE_EXTRA_FILE_ARGS+=("-f" "$(cd "$(dirname "${2:-}")" && pwd)/$(basename "${2:-}")")
             shift 2 ;;
+        --auth-enabled)
+            AUTH_ENABLED_EXPLICIT=true; shift ;;
         --cleanup-on-failure)
             CLEANUP_ON_FAILURE=true; shift ;;
         --running-versions)
@@ -773,11 +862,22 @@ for i in $(seq 0 $((PROV_COUNT - 1))); do
     collect_provider_compose "${i}"
 done
 
+AUTH_ENABLED=false
+if [[ "${AUTH_ENABLED_EXPLICIT}" == true ]] || [[ "${AUTH_DISABLED:-}" == "false" ]]; then
+    AUTH_ENABLED=true
+fi
+if [[ "${AUTH_ENABLED}" == true ]]; then
+    COMPOSE_PROFILES+=("--profile" "auth")
+fi
+
 # --- Running versions (standalone) ----------------------------------------- #
 
 if [[ "${RUNNING_VERSIONS}" == true ]]; then
     check_required_tools podman podman-compose curl jq || exit 1
     ensure_podman_running || exit 1
+    if [[ -d "${CONTROL_PLANE_TMP_DIR}/deploy" ]]; then
+        ensure_deploy_env "${CONTROL_PLANE_TMP_DIR}" || exit 1
+    fi
     get_running_versions "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || exit 1
     exit 0
 fi
@@ -1076,6 +1176,8 @@ fi
 log "Cloning control-plane (repo=${CONTROL_PLANE_REPO}, branch=${CONTROL_PLANE_BRANCH})"
 git clone --branch "${CONTROL_PLANE_BRANCH}" --single-branch --depth 1 "${CONTROL_PLANE_REPO}" "${CONTROL_PLANE_TMP_DIR}"
 
+ensure_deploy_env "${CONTROL_PLANE_TMP_DIR}" || exit 1
+
 # --- Deploy ---------------------------------------------------------------- #
 
 if [[ "${CLEANUP_ON_FAILURE}" == true ]]; then
@@ -1089,6 +1191,9 @@ for i in $(seq 0 $((PROV_COUNT - 1))); do
 done
 if [[ ${#ENABLED_LABELS[@]} -gt 0 ]]; then
     info "Enabled providers: ${ENABLED_LABELS[*]}"
+fi
+if [[ "${AUTH_ENABLED}" == true ]]; then
+    info "Authentication enabled (compose profile: auth)"
 fi
 podman-compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} up -d
 

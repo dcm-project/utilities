@@ -98,6 +98,7 @@ jobs:
             --expect-contains "--control-plane-branch" "control-plane-branch flag" \
             --expect-contains "--kubeconfig" "kubeconfig flag" \
             --expect-contains "--compose-file" "compose-file flag" \
+            --expect-contains "--auth-enabled" "auth-enabled flag" \
             --expect-contains "--cleanup-on-failure" "cleanup-on-failure flag" \
             --expect-contains "--running-versions" "running-versions flag" \
             --expect-contains "--tear-down" "tear-down flag" \
@@ -251,6 +252,12 @@ jobs:
             --expect-contains "DCM_CONTAINER_SP_URL" "container SP URL env var" \
             --expect-contains "DCM_ACM_CLUSTER_SP_URL" "ACM cluster SP URL env var" \
             --expect-contains "DCM_NATS_URL" "NATS URL env var"
+
+          run_case "--help contains auth flags" \
+            --expect-exit "--help" 0 \
+            --expect-contains "--auth-enabled" "auth-enabled flag" \
+            --expect-contains "--keycloak-url" "keycloak-url flag" \
+            --expect-contains "DCM_KEYCLOAK_URL" "keycloak URL env var"
 
           # --- Unknown flag handling --------------------------------------------
 
