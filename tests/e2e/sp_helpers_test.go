@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -88,8 +89,9 @@ func expectRFC9457Problem(resp *http.Response, wantStatus int, wantTypeSuffix, w
 	GinkgoHelper()
 	Expect(resp.StatusCode).To(Equal(wantStatus))
 
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	Expect(ct).To(ContainSubstring("application/problem+json"),
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	Expect(err).NotTo(HaveOccurred(), "Content-Type must be a valid media type, got %q", resp.Header.Get("Content-Type"))
+	Expect(mediaType).To(Equal("application/problem+json"),
 		"expected application/problem+json, got %q", resp.Header.Get("Content-Type"))
 
 	var problem map[string]interface{}
@@ -101,7 +103,7 @@ func expectRFC9457Problem(resp *http.Response, wantStatus int, wantTypeSuffix, w
 
 	status, ok := problem["status"].(float64)
 	Expect(ok).To(BeTrue(), "status should be a number, got %#v", problem["status"])
-	Expect(int(status)).To(Equal(wantStatus))
+	Expect(status).To(Equal(float64(wantStatus)))
 
 	return problem
 }

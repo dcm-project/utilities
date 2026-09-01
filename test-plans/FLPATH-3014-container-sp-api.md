@@ -230,7 +230,7 @@ Deployed-stack smoke tests that the running Container SP image emits RFC 9457 pr
 |------|--------|----------|
 | 1 | POST with invalid CPU range (`min` > `max`) **and** reserved label `dcm.project/managed-by` | HTTP 400 |
 | 2 | Parse body | RFC 9457 problem with `type` = `.../invalid-argument` |
-| 3 | Check `errors` | Array with **≥ 2** entries; each has non-empty `detail` |
+| 3 | Check `errors` | Array with **≥ 2** entries; each has non-empty `detail`; entries must cover both the CPU range violation and the reserved `dcm.project/managed-by` label |
 
 ### E2E via DCM Gateway
 
