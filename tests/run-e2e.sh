@@ -31,6 +31,8 @@ Options:
   --gateway-url URL            Override DCM_GATEWAY_URL (default: http://localhost:8080/api/v1alpha1)
   --label-filter EXPR          Ginkgo label filter (e.g. "smoke", "cli")
   --junit-report FILE          Write JUnit XML report to FILE
+  --auth-enabled               Enable authentication on deploy (forwarded to deploy-dcm.sh)
+  --keycloak-url URL           Keycloak base URL for auth tests (default: http://localhost:8180)
   --help                       Show this help message
 
 Deploy passthrough flags (forwarded to deploy-dcm.sh):
@@ -63,6 +65,7 @@ Environment variables:
   DCM_KUBEVIRT_SP_URL      KubeVirt SP direct URL (default: http://localhost:8081/api/v1alpha1)
   DCM_NATS_URL             NATS URL for event tests (default: nats://localhost:4222)
   DCM_GATEWAY_URL          Control plane API URL (default: http://localhost:8080/api/v1alpha1)
+  DCM_KEYCLOAK_URL         Keycloak URL when using --keycloak-url (default: http://localhost:8180)
 
 CLI binary resolution order:
   1. --dcm-cli-path flag or DCM_CLI_PATH env var
@@ -79,6 +82,7 @@ Examples:
   $(basename "$0") --control-plane-branch feature-x --skip-teardown
   $(basename "$0") --k8s-container-service-provider --cluster-api https://api.example.com:6443
   $(basename "$0") --skip-deploy --label-filter "sp && container"
+  $(basename "$0") --auth-enabled --skip-teardown
 EOF
 }
 
@@ -159,6 +163,7 @@ CLI_VERSION="${CLI_VERSION:-main}"
 GATEWAY_URL=""
 LABEL_FILTER=""
 JUNIT_REPORT=""
+KEYCLOAK_URL=""
 DEPLOY_ARGS=()
 ENABLE_CONTAINER_SP=false
 ENABLE_ACM_CLUSTER_SP=false
@@ -190,6 +195,12 @@ while [[ $# -gt 0 ]]; do
             shift 2 ;;
         --junit-report)
             JUNIT_REPORT="$2"
+            shift 2 ;;
+        --auth-enabled)
+            DEPLOY_ARGS+=("$1")
+            shift ;;
+        --keycloak-url)
+            KEYCLOAK_URL="$2"
             shift 2 ;;
         --control-plane-branch|--control-plane-dir|--control-plane-repo)
             DEPLOY_ARGS+=("$1" "$2")
@@ -264,6 +275,11 @@ fi
 if [[ -n "${GATEWAY_URL}" ]]; then
     export DCM_GATEWAY_URL="${GATEWAY_URL}"
     info "DCM_GATEWAY_URL=${GATEWAY_URL}"
+fi
+
+if [[ -n "${KEYCLOAK_URL}" ]]; then
+    export DCM_KEYCLOAK_URL="${KEYCLOAK_URL}"
+    info "DCM_KEYCLOAK_URL=${KEYCLOAK_URL}"
 fi
 
 # Export SP URLs when providers are enabled.

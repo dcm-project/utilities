@@ -28,7 +28,9 @@ CI runs ShellCheck on changed `*.sh` files via `.github/workflows/lint.yaml` (on
 
 Deploys the full DCM stack for E2E testing by cloning control-plane (`deploy/compose.yaml`), running `podman-compose up`, and polling health endpoints until all services respond 2xx.
 
-**Flow:** clone control-plane → `podman-compose up -d` → verify containers running → poll `/api/v1alpha1/health` → collect container versions from Quay.io API → write `dcm-versions.json`.
+**Flow:** clone control-plane → bootstrap `deploy/.env` → `podman-compose up -d` → verify containers running → poll `/api/v1alpha1/health` → collect container versions from Quay.io API → write `dcm-versions.json`.
+
+**Compose credentials:** After clone, the script copies `deploy/.env.example` to `deploy/.env` when missing and upserts DB/auth keys (lab defaults unless overridden by shell env). Control-plane compose reads these via `env_file: .env`. Pass `--auth-enabled` or set `AUTH_DISABLED=false` to add the compose `auth` profile (Keycloak) and write auth credentials into `.env`.
 
 **Modes:** The script has three mutually exclusive modes:
 - **Deploy** (default): full clone + bring-up + health check. Pass `--cleanup-on-failure` to auto-teardown on error (default leaves partial state for debugging).
@@ -47,6 +49,8 @@ When a non-main version is specified, `--control-plane-branch` is auto-derived t
 **ACM/MCE deployment:** Pass `--deploy-acm` or `--deploy-mce` to install Red Hat ACM or MCE on the OCP cluster before starting the DCM stack. This clones the [acm-cluster-service-provider](https://github.com/dcm-project/acm-cluster-service-provider) repo and runs its `hack/deploy-acm-mce.sh` script. Can take 10–20 minutes. Requires `oc` and `jq`. These are opt-in flags, not enabled by default.
 
 **Cluster authentication:** When any provider is enabled, the script resolves cluster access in priority order: explicit `--kubeconfig`, existing `oc`/`kubectl` session, or `oc login` via `--cluster-api` + `--cluster-password`.
+
+**Control-plane authentication:** Pass `--auth-enabled` (or set `AUTH_DISABLED=false`) to start Keycloak and enable JWT validation. Use the same flag on `--tear-down` when tearing down an auth-enabled stack. `tests/run-e2e.sh` accepts `--auth-enabled` and `--keycloak-url` for Jenkins compatibility.
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
@@ -87,6 +91,8 @@ The script is organized into sections separated by comment banners. Key function
 | `validate_k8s_container_provider` | Validates k8s container SP prerequisites |
 | `validate_k8s_storage_provider` | Validates k8s storage SP prerequisites |
 | `validate_acm_cluster_provider` | Validates ACM cluster SP prerequisites |
+| `ensure_deploy_env` | Bootstraps `deploy/.env` from `.env.example` and upserts credentials |
+| `upsert_deploy_env_var` | Idempotently sets a key in `deploy/.env` |
 | `resolve_provider_cli` | Resolves `oc`/`kubectl` per provider's `CLI_REQUIREMENT` |
 | `collect_provider_compose` | Collects compose profiles/overrides for an enabled provider |
 | `verify_health` | Confirms all compose services are running, then polls health endpoints with timeout |
