@@ -176,6 +176,49 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 		})
 	})
 
+	Context("RFC 9457 error format", Label("contract"), func() {
+		It("returns problem+json with status and project URI on validation error", func() {
+			resp, err := doContainerSPRequest(http.MethodPost, "/containers", `{}`)
+			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
+
+			expectRFC9457Problem(resp, http.StatusBadRequest, "invalid-argument", "Invalid argument")
+		})
+
+		It("returns errors array on multi-field validation failure", func() {
+			body := `{
+				"spec": {
+					"service_type": "container",
+					"metadata": {
+						"name": "e2e-multi-err",
+						"labels": {"dcm.project/managed-by": "bad"}
+					},
+					"image": {"reference": "docker.io/library/nginx:alpine"},
+					"resources": {
+						"cpu": {"min": 10, "max": 5},
+						"memory": {"min": "128MB", "max": "256MB"}
+					}
+				}
+			}`
+			resp, err := doContainerSPRequest(http.MethodPost, "/containers", body)
+			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
+
+			problem := expectRFC9457Problem(resp, http.StatusBadRequest, "invalid-argument", "Invalid argument")
+			errors, ok := problem["errors"].([]interface{})
+			Expect(ok).To(BeTrue(), "expected errors array in multi-field validation response, got %#v", problem["errors"])
+			Expect(errors).To(HaveLen(2))
+
+			for i, e := range errors {
+				entry, ok := e.(map[string]interface{})
+				Expect(ok).To(BeTrue(), "errors[%d] should be an object", i)
+				Expect(entry).To(HaveKey("detail"))
+				detail, _ := entry["detail"].(string)
+				Expect(detail).NotTo(BeEmpty())
+			}
+		})
+	})
+
 	Context("validation errors", func() {
 		It("rejects an empty body", func() {
 			resp, err := doContainerSPRequest(http.MethodPost, "/containers", "")

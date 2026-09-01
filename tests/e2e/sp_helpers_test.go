@@ -22,6 +22,7 @@ const (
 	defaultContainerSPURL = "http://localhost:8082/api/v1alpha1"
 	defaultNATSURL        = "nats://localhost:4222"
 	natsStatusSubject     = "dcm.container" // flat subject, NOT hierarchical
+	problemTypeBaseURI    = "https://dcm-project.github.io/problems/"
 )
 
 var (
@@ -80,6 +81,29 @@ func doContainerSPRequest(method, path string, body string) (*http.Response, err
 	}
 
 	return httpClient.Do(req)
+}
+
+// expectRFC9457Problem asserts an RFC 9457 problem+json response (FLPATH-4720/4721).
+func expectRFC9457Problem(resp *http.Response, wantStatus int, wantTypeSuffix, wantTitle string) map[string]interface{} {
+	GinkgoHelper()
+	Expect(resp.StatusCode).To(Equal(wantStatus))
+
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	Expect(ct).To(ContainSubstring("application/problem+json"),
+		"expected application/problem+json, got %q", resp.Header.Get("Content-Type"))
+
+	var problem map[string]interface{}
+	decodeJSON(resp, &problem)
+
+	Expect(problem).To(HaveKeyWithValue("type", problemTypeBaseURI+wantTypeSuffix))
+	Expect(problem).To(HaveKeyWithValue("title", wantTitle))
+	Expect(problem).To(HaveKey("detail"))
+
+	status, ok := problem["status"].(float64)
+	Expect(ok).To(BeTrue(), "status should be a number, got %#v", problem["status"])
+	Expect(int(status)).To(Equal(wantStatus))
+
+	return problem
 }
 
 // createTestContainer creates a container via the SP API and returns the parsed response body.
