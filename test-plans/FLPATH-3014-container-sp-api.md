@@ -5,6 +5,7 @@
 **Assignee:** Gabriel Farache
 **Parent:** DCM: container provider
 **Repo:** [dcm-project/k8s-container-service-provider](https://github.com/dcm-project/k8s-container-service-provider)
+**Related:** [FLPATH-4720](https://redhat.atlassian.net/browse/FLPATH-4720) — RFC 9457 error responses (E2E contract tests)
 **Blocks:** FLPATH-3016 (Bootstrap Container SP), FLPATH-2924 (ADR container provider), FLPATH-3015 (Health Endpoint for Container SP)
 
 ## Summary
@@ -29,10 +30,11 @@ Key PRs:
 - [PR #5](https://github.com/dcm-project/k8s-container-service-provider/pull/5) — requirements and test plans
 - [PR #9](https://github.com/dcm-project/k8s-container-service-provider/pull/9) — API handler implementation
 - [PR #14](https://github.com/dcm-project/k8s-container-service-provider/pull/14) — API alignment fixes
+- [PR #37](https://github.com/dcm-project/k8s-container-service-provider/pull/37) — RFC 9457 error responses + multi-error validation (FLPATH-4720)
 
 **What the repo tests already cover (no need to duplicate at E2E):**
 - OpenAPI request validation (TC-I008, TC-I009 — table-driven with fake server)
-- Handler error mapping and RFC 7807 format (TC-U001–TC-U056)
+- Handler error mapping and RFC 9457 format (TC-U001–TC-U056, TC-U085–TC-U099, TC-I008, TC-I104)
 - Pagination boundary conditions (TC-U057, TC-I008)
 - Graceful shutdown / SIGTERM handling (TC-I004, TC-I005)
 - Registration retry + backoff logic (TC-I010–TC-I016)
@@ -128,9 +130,11 @@ Key PRs:
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | POST with empty body | HTTP 400 |
+| 1 | POST with empty body | HTTP 400 with RFC 9457 `application/problem+json` body |
 | 2 | POST with missing required fields (e.g., no image) | HTTP 400 with descriptive error |
 | 3 | POST with invalid field types | HTTP 400 (OpenAPI validation) |
+
+See **TC-19** and **TC-20** for deployed-stack RFC 9457 contract assertions (FLPATH-4720).
 
 #### TC-09: Create provisions a Service when ports are specified
 
@@ -207,6 +211,27 @@ Key PRs:
 | 1 | POST with unknown fields | Handled per spec (rejected or ignored) |
 | 2 | POST with wrong content type | HTTP 400/415 |
 
+### RFC 9457 Error Format (FLPATH-4720)
+
+Deployed-stack smoke tests that the running Container SP image emits RFC 9457 problem details (RFC 9457 obsoletes RFC 7807; same `application/problem+json` media type). Implemented in `tests/e2e/sp_container_api_test.go` (`Label: sp, container, contract`).
+
+#### TC-19: Validation error returns RFC 9457 problem body
+
+| Step | Action | Expected |
+|------|--------|----------|
+| 1 | POST `/api/v1alpha1/containers` with `{}` | HTTP 400 |
+| 2 | Check `Content-Type` | `application/problem+json` |
+| 3 | Parse body | `type` = `https://dcm-project.github.io/problems/invalid-argument` |
+| 4 | Check fields | `title` = `Invalid argument`, `status` = 400, `detail` present |
+
+#### TC-20: Multi-field validation returns `errors` array
+
+| Step | Action | Expected |
+|------|--------|----------|
+| 1 | POST with invalid CPU range (`min` > `max`) **and** reserved label `dcm.project/managed-by` | HTTP 400 |
+| 2 | Parse body | RFC 9457 problem with `type` = `.../invalid-argument` |
+| 3 | Check `errors` | Array with **≥ 2** entries; each has non-empty `detail` |
+
 ### E2E via DCM Gateway
 
 #### TC-18: Create container through full DCM flow
@@ -238,6 +263,8 @@ See `.ai/test-plans/k8s-container-sp-integration.test-plan.md` for the full TC-I
 | Concern | Tested by repo (fake client) | E2E adds value |
 |---------|------------------------------|----------------|
 | Input validation / 400 errors | Yes (TC-I008, TC-U057) | Minimal — confirms middleware wiring |
+| RFC 9457 error wire format | Yes (TC-U022, TC-I008, TC-I104) | **Yes** — confirms deployed image matches spec (TC-19, TC-20) |
+| Multi-error `errors[]` on Create | Yes (TC-U092–TC-U099) | **Yes** — HTTP round-trip (TC-20) |
 | K8s Deployment creation | Yes (fake client) | **Yes** — real scheduling, image pull, Pod lifecycle |
 | Service creation with ports | Yes (fake client) | **Yes** — real ClusterIP assignment |
 | DCM label verification | Yes (fake client) | **Yes** — labels survive real K8s admission |

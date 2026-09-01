@@ -5,6 +5,7 @@
 **Assignee:** Gabriel Farache
 **Parent:** DCM: Create OCP service provider
 **Repo:** [dcm-project/acm-cluster-service-provider](https://github.com/dcm-project/acm-cluster-service-provider)
+**Related:** [FLPATH-4721](https://redhat.atlassian.net/browse/FLPATH-4721) — RFC 9457 error responses (E2E contract tests)
 
 ## Summary
 
@@ -24,7 +25,8 @@ Verified against actual implementation in PRs [#5](https://github.com/dcm-projec
 
 | Tier | Requires | Test Cases | Notes |
 |------|----------|------------|-------|
-| **Handler validation only** | SP binary + DCM stack, any cluster | TC-04, TC-05, TC-12 | Fail at handler validation before reaching ClusterService |
+| **Handler validation only** | SP binary + DCM stack, any cluster | TC-04, TC-05, TC-12, TC-14 | Fail at handler validation before reaching ClusterService |
+| **RFC 9457 contract (404)** | SP + DCM stack + **HyperShift CRDs** | TC-15 | Without CRDs, GET missing cluster returns 500 instead of 404 |
 | **Registration** | SP binary + DCM stack, any cluster | TC-01 (partial) | Registers even when unhealthy (see below), but `kubernetesSupportedVersions` metadata requires ClusterImageSet CRDs |
 | **CRUD with K8s access** | SP binary + DCM stack + **HyperShift CRDs on cluster** | TC-07, TC-09, TC-11 | Get/List/Delete call through to ClusterService which hits K8s API for HostedCluster resources — returns **500** (not 404/empty) without CRDs |
 | **Full lifecycle** (FLPATH-3378) | ACM Hub + HyperShift + KubeVirt/BM infra + ClusterImageSets | TC-02, TC-03, TC-06, TC-08, TC-10, TC-13 |
@@ -48,9 +50,10 @@ Key PRs:
 - [PR #2](https://github.com/dcm-project/acm-cluster-service-provider/pull/2) — spec and test plans (linked from Jira)
 - [PR #6](https://github.com/dcm-project/acm-cluster-service-provider/pull/6) — API handler (Topic 4)
 - [PR #8](https://github.com/dcm-project/acm-cluster-service-provider/pull/8) — KubeVirt + BareMetal cluster service
+- [PR #33](https://github.com/dcm-project/acm-cluster-service-provider/pull/33) — RFC 9457 error responses (FLPATH-4721)
 
 **What the repo tests already cover (no need to duplicate at E2E):**
-- Handler validation and RFC 7807 errors (TC-HDL-CRT-UT-001–018, TC-HDL-GET-UT-001–005, etc.)
+- Handler validation and RFC 9457 errors (TC-HDL-CRT-UT-001–018, TC-HDL-GET-UT-001–005, TC-HTTP-IT-003–005, etc.)
 - Status mapping from HyperShift conditions (TC-STS-UT-001–012, shared component)
 - Registration payload and retry logic (TC-REG-UT-001–006)
 - KubeVirt CRD construction (TC-KV-UT-001–020)
@@ -130,8 +133,10 @@ Key PRs:
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | POST `/api/v1alpha1/clusters` with empty body | HTTP 400 with RFC 7807 error |
+| 1 | POST `/api/v1alpha1/clusters` with empty body | HTTP 400 with RFC 9457 `application/problem+json` body |
 | 2 | POST with missing required fields | HTTP 400 with descriptive error |
+
+See **TC-14** for deployed-stack RFC 9457 contract assertions (FLPATH-4721).
 
 #### TC-05: Create returns error for unsupported platform
 
@@ -153,7 +158,7 @@ Key PRs:
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | GET `/api/v1alpha1/clusters/nonexistent-id` | HTTP 404 |
+| 1 | GET `/api/v1alpha1/clusters/nonexistent-id` | HTTP 404 with RFC 9457 `.../not-found` body (requires HyperShift CRDs; see TC-15) |
 
 ### List Clusters
 
@@ -199,6 +204,30 @@ Key PRs:
 | 2 | POST with wrong field types | HTTP 400 |
 | 3 | GET with invalid path parameter | HTTP 400 or 404 |
 
+### RFC 9457 Error Format (FLPATH-4721)
+
+Deployed-stack smoke tests that the running ACM Cluster SP image emits RFC 9457 problem details with project-controlled `type` URIs (`https://dcm-project.github.io/problems/*`). Implemented in `tests/e2e/sp_acm_cluster_api_test.go` (`Label: sp, acm-cluster, contract`).
+
+#### TC-14: Validation error returns RFC 9457 problem body
+
+| Step | Action | Expected |
+|------|--------|----------|
+| 1 | POST `/api/v1alpha1/clusters` with `{}` | HTTP 400 |
+| 2 | Check `Content-Type` | `application/problem+json` |
+| 3 | Parse body | `type` = `https://dcm-project.github.io/problems/invalid-argument` |
+| 4 | Check fields | `title` = `Invalid argument`, `status` = 400, `detail` present |
+
+#### TC-15: Not-found returns RFC 9457 problem body
+
+**Preconditions:** HyperShift CRDs installed (without them, handler returns HTTP 500).
+
+| Step | Action | Expected |
+|------|--------|----------|
+| 1 | GET `/api/v1alpha1/clusters/nonexistent-e2e-rfc9457` | HTTP 404 |
+| 2 | Check `Content-Type` | `application/problem+json` |
+| 3 | Parse body | `type` = `https://dcm-project.github.io/problems/not-found` |
+| 4 | Check fields | `title` = `Not found`, `status` = 404, `detail` present |
+
 ### E2E via DCM Gateway
 
 #### TC-13: Create cluster through full DCM flow
@@ -230,6 +259,7 @@ See `.ai/test-plans/acm-cluster-sp.integration-tests.md` for the full mapping. K
 | Concern | Tested by repo (fake client) | E2E adds value |
 |---------|------------------------------|----------------|
 | Input validation / 400 errors | Yes (TC-HDL-CRT-UT) | Minimal |
+| RFC 9457 error wire format | Yes (TC-HTTP-IT-003–005) | **Yes** — confirms deployed image matches spec (TC-14, TC-15) |
 | HostedCluster CR creation | Yes (fake K8s client) | **Yes** — real ACM admission, webhooks |
 | NodePool provisioning | Yes (fake client) | **Yes** — real HyperShift reconciliation |
 | ClusterImageSet discovery | Yes (TC-KV-UT-004) | **Yes** — real CIS resources on Hub |
