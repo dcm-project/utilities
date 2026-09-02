@@ -4,7 +4,6 @@ package e2e_test
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -183,7 +182,11 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 
-			expectRFC9457Problem(resp, http.StatusBadRequest, "invalid-argument", "Invalid argument")
+			expectRFC9457Problem(resp, problemDetailExpectation{
+				Status:     http.StatusBadRequest,
+				TypeSuffix: "invalid-argument",
+				Title:      invalidArgumentTitle,
+			})
 		})
 
 		It("returns errors array on multi-field validation failure", func() {
@@ -205,28 +208,20 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 
-			problem := expectRFC9457Problem(resp, http.StatusBadRequest, "invalid-argument", "Invalid argument")
-			errors, ok := problem["errors"].([]interface{})
-			Expect(ok).To(BeTrue(), "expected errors array in multi-field validation response, got %#v", problem["errors"])
-			Expect(len(errors)).To(BeNumerically(">=", 2))
-
-			var detailsBlob strings.Builder
-			for i, e := range errors {
-				entry, ok := e.(map[string]interface{})
-				Expect(ok).To(BeTrue(), "errors[%d] should be an object", i)
-				Expect(entry).To(HaveKey("detail"))
-				detail, _ := entry["detail"].(string)
-				Expect(detail).NotTo(BeEmpty())
-				detailsBlob.WriteString(strings.ToLower(detail))
-				if pointer, ok := entry["pointer"].(string); ok {
-					detailsBlob.WriteString(" " + strings.ToLower(pointer))
-				}
-			}
-			combined := detailsBlob.String()
-			Expect(combined).To(ContainSubstring("cpu"),
-				"errors should include CPU range validation, got %#v", errors)
-			Expect(combined).To(ContainSubstring("managed-by"),
-				"errors should include reserved-label validation, got %#v", errors)
+			problem := readContainerProblemDetail(resp, http.StatusBadRequest)
+			Expect(problem.ProblemDetail).To(Equal(ProblemDetail{
+				Type:   problemTypeBaseURI + "invalid-argument",
+				Title:  invalidArgumentTitle,
+				Status: http.StatusBadRequest,
+				Detail: containerMultiErrorDetail,
+			}))
+			Expect(problem.Errors).To(HaveLen(2))
+			Expect(problem.Errors[0].Detail).To(ContainSubstring("cpu.min"))
+			Expect(problem.Errors[0].Pointer).NotTo(BeNil())
+			Expect(*problem.Errors[0].Pointer).To(Equal("#/spec/resources/cpu/min"))
+			Expect(problem.Errors[1].Detail).To(ContainSubstring("dcm.project/managed-by"))
+			Expect(problem.Errors[1].Pointer).NotTo(BeNil())
+			Expect(*problem.Errors[1].Pointer).To(Equal("#/spec/metadata/labels/dcm.project~1managed-by"))
 		})
 	})
 

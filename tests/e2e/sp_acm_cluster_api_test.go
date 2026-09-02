@@ -139,7 +139,11 @@ var _ = Describe("ACM Cluster SP API", Label("sp", "acm-cluster"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 
-			expectRFC9457Problem(resp, http.StatusBadRequest, "invalid-argument", "Invalid argument")
+			expectRFC9457Problem(resp, problemDetailExpectation{
+				Status:     http.StatusBadRequest,
+				TypeSuffix: "invalid-argument",
+				Title:      invalidArgumentTitle,
+			})
 		})
 
 		It("returns problem+json on not found", func() {
@@ -153,7 +157,11 @@ var _ = Describe("ACM Cluster SP API", Label("sp", "acm-cluster"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 
-			expectRFC9457Problem(resp, http.StatusNotFound, "not-found", "Not found")
+			expectRFC9457Problem(resp, problemDetailExpectation{
+				Status:     http.StatusNotFound,
+				TypeSuffix: "not-found",
+				Title:      notFoundTitle,
+			})
 		})
 	})
 
