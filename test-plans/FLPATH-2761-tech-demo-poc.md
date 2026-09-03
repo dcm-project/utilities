@@ -4,9 +4,9 @@
 |---|---|
 | **Ticket** | [FLPATH-2761](https://redhat.atlassian.net/browse/FLPATH-2761) |
 | **Author** | Thomas Stetson |
-| **Version** | 1.3 |
-| **Last Updated** | 2026-08-17 |
-| **Status** | Draft |
+| **Version** | 1.4 |
+| **Last Updated** | 2026-09-03 |
+| **Status** | Approved |
 
 ## Description
 
@@ -758,7 +758,7 @@ current control-plane."
    YAML→JSON round-trip silently drops it
 3. No published CLI artifact can create a catalog item against the current API
 
-**Fix (in progress on local branches `FLPATH-4770-fix-user-journey`):**
+**Fix (in code review on branch `FLPATH-4770-fix-user-journey`):**
 - CLI: `go get github.com/dcm-project/control-plane@main && go mod tidy`
 - Website: Update both getting-started YAML files to multi-resource schema
 
@@ -771,6 +771,7 @@ and the Preventive CI Recommendations section below.
 - Jul 21: CLI PR #28 updates test fixtures and table display only — does not bump `go.mod`
 - Aug 6: Issue discovered during E2E test plan execution (this plan)
 - Aug 17: Fix implemented locally, FLPATH-4770 filed, FLPATH-4794 filed for preventive CI
+- Sep 3: Plan approved; FLPATH-4770 fix in code review; TC-03 re-validation pending merge
 
 Full details (reproduction steps, exact YAML diffs, verification commands) are
 in [FLPATH-4770](https://redhat.atlassian.net/browse/FLPATH-4770).
@@ -833,7 +834,7 @@ was created to track this work. Detailed test plan:
 `test-plans/FLPATH-4794-cli-api-contract-testing.md`.
 
 **Effort:** Medium — reuses the existing subsystem compose stack; main work is
-the workflow YAML and a `testdata/docs/` fixture directory.
+the workflow YAML and a `testdata/website/` fixture directory.
 
 ### 3. Dependency Freshness Alert (CLI repo)
 
@@ -854,6 +855,7 @@ the workflow YAML and a `testdata/docs/` fixture directory.
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.4 | 2026-09-03 | Plan approved; FLPATH-4770 fix in code review; TC-03 re-validation pending merge |
 | 1.3 | 2026-08-17 | Added Preventive CI Recommendations section with three proposed gates to prevent FLPATH-4770 recurrence |
 | 1.2 | 2026-08-06 | Added test execution results section with findings from automated run |
 | 1.1 | 2026-08-06 | Revised after repo inspection: corrected page URLs, updated TC-07 to reflect actual CI (formatting+spelling, no link checker), updated TC-08 with actual demo content (sovereignty blog post + interactive walkthrough), added link validation recommendation, added Upstream CI Coverage section |

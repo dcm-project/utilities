@@ -4,8 +4,8 @@
 |---|---|
 | **Ticket** | [FLPATH-4794](https://redhat.atlassian.net/browse/FLPATH-4794) |
 | **Author** | Thomas Stetson |
-| **Version** | 1.1 |
-| **Last Updated** | 2026-08-18 |
+| **Version** | 1.2 |
+| **Last Updated** | 2026-09-03 |
 | **Status** | Draft |
 
 ## Description
@@ -163,7 +163,7 @@ Go types lacked the `Resources` field, so `json.Unmarshal` silently dropped it.
 #### Prerequisites
 
 - CLI repo checked out with current `go.mod`
-- Test fixture `testdata/docs/small-vm.yaml` (copy of website tutorial YAML)
+- Test fixture `testdata/website/small-vm.yaml` (copy of website tutorial YAML)
 
 #### Steps
 
@@ -178,7 +178,7 @@ import catalogapi "github.com/dcm-project/control-plane/api/catalog/v1alpha1"
 
 func TestDocCatalogItemPreservesResources(t *testing.T) {
     ci, err := parseInputFileAs[catalogapi.CreateCatalogItemJSONRequestBody](
-        "testdata/docs/small-vm.yaml",
+        "testdata/website/small-vm.yaml",
     )
     require.NoError(t, err)
 
@@ -223,7 +223,7 @@ and is now required by the API.
 
 #### Prerequisites
 
-- Test fixture `testdata/docs/my-vm.yaml` (copy of website tutorial YAML)
+- Test fixture `testdata/website/my-vm.yaml` (copy of website tutorial YAML)
 
 #### Steps
 
@@ -235,7 +235,7 @@ The CLI calls
 ```go
 func TestDocInstancePreservesResourceField(t *testing.T) {
     inst, err := parseInputFileAs[catalogapi.CreateCatalogItemInstanceJSONRequestBody](
-        "testdata/docs/my-vm.yaml",
+        "testdata/website/my-vm.yaml",
     )
     require.NoError(t, err)
 
@@ -280,7 +280,7 @@ without modification.
 - Catalog-subsystem compose stack running (port 28080)
 - WireMock configured to accept placement-manager requests (default in compose)
 - CLI built from source (`go build -o /tmp/dcm ./cmd/dcm`)
-- Fixture YAMLs in `testdata/docs/` (byte-for-byte copies of website examples)
+- Fixture YAMLs in `testdata/website/` (byte-for-byte copies of website examples)
 
 #### Steps
 
@@ -288,7 +288,7 @@ without modification.
 
 ```bash
 /tmp/dcm catalog item create \
-  --from-file testdata/docs/small-vm.yaml \
+  --from-file testdata/website/small-vm.yaml \
   --id small-vm \
   --control-plane-url http://localhost:28080
 ```
@@ -312,7 +312,7 @@ match the item created in Step 1.
 
 ```bash
 /tmp/dcm catalog instance create \
-  --from-file testdata/docs/my-vm.yaml \
+  --from-file testdata/website/my-vm.yaml \
   --id my-dev-vm \
   --control-plane-url http://localhost:28080
 ```
@@ -496,13 +496,15 @@ None.
 
 ### Proposed file locations
 
-| Artifact | Location |
-|----------|----------|
-| Static contract tests | `cli/internal/commands/contract_test.go` |
-| Doc fixture YAMLs | `cli/testdata/docs/small-vm.yaml`, `cli/testdata/docs/my-vm.yaml` |
-| Subsystem workflow | `control-plane/.github/workflows/cli-contract.yaml` |
-| Dep freshness workflow | `cli/.github/workflows/dep-freshness.yaml` |
-| Doc validation workflow | `dcm-project.github.io/.github/workflows/validate-examples.yaml` |
+| Artifact | Location | Status |
+|----------|----------|--------|
+| Static contract tests (TC-U154, TC-U155) | `cli/internal/commands/contract_test.go` | Implemented |
+| Doc fixture YAMLs | `cli/testdata/website/small-vm.yaml`, `cli/testdata/website/my-vm.yaml` | Implemented |
+| Fixture drift check | `cli/hack/check-website-fixtures.sh` | Implemented |
+| Fixture drift workflow | `cli/.github/workflows/check-website-fixtures.yaml` | Implemented |
+| Subsystem workflow | `control-plane/.github/workflows/cli-contract.yaml` | Not started |
+| Dep freshness workflow | `cli/.github/workflows/dep-freshness.yaml` | Not started |
+| Doc validation workflow | `dcm-project.github.io/.github/workflows/validate-examples.yaml` | Not started |
 
 ### Existing infrastructure to reuse
 
@@ -515,14 +517,20 @@ None.
 
 ### Fixture maintenance
 
-The `testdata/docs/` YAML files should be **byte-for-byte copies** of the YAML
-code blocks in the website's getting-started pages. A CI step can verify this:
+The `testdata/website/` YAML files should be **byte-for-byte copies** of the YAML
+code blocks in the website's getting-started pages. CI verifies drift via:
 
 ```bash
-# Extract YAML from website markdown and diff against fixtures
-diff <(sed -n '/^```yaml$/,/^```$/p' content/docs/.../create-small-vm-catalog-item.md | sed '1d;$d') \
-     testdata/docs/small-vm.yaml
+# Local check (also: make check-fixtures in cli repo)
+hack/check-website-fixtures.sh
+
+# Refresh fixtures from upstream website main (after website PR merges)
+hack/check-website-fixtures.sh --update
 ```
+
+The `check-website-fixtures` workflow runs on PRs and weekly. It fails until the
+companion website PR (FLPATH-4770) merges — fixtures intentionally carry the
+fixed schema ahead of upstream `main`.
 
 ---
 
@@ -538,7 +546,7 @@ diff <(sed -n '/^```yaml$/,/^```$/p' content/docs/.../create-small-vm-catalog-it
 
 ## Risk Observations
 
-1. **Fixture drift** — If `testdata/docs/` files get out of sync with the
+1. **Fixture drift** — If `testdata/website/` files get out of sync with the
    website, the contract test gives false confidence. Mitigate with a
    cross-repo sync check (see Fixture Maintenance above).
 
@@ -565,6 +573,7 @@ diff <(sed -n '/^```yaml$/,/^```$/p' content/docs/.../create-small-vm-catalog-it
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.2 | 2026-09-03 | Updated implementation notes: `testdata/website/`, `check-website-fixtures` script/workflow, TC-U154/TC-U155 status |
 | 1.1 | 2026-08-18 | Merged TC-03/04 into single lifecycle test (fixture ID alignment), renumbered TC-05→04 and TC-06→05, completed TC-05 freshness procedure, fixed CLI subcommand references |
 | 1.0 | 2026-08-17 | Initial test plan: 5 test cases covering static serialization, subsystem integration, negative scenarios, and dependency freshness |
 
