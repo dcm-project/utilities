@@ -20,7 +20,10 @@ kind_resolve_from_context() {
 
 	if [[ "${ctx}" =~ ^kind-(.*)$ ]]; then
 		local name="${BASH_REMATCH[1]}"
+		# Set for scripts that source this library.
+		# shellcheck disable=SC2034
 		KIND_NODE="${name}-control-plane"
+		# shellcheck disable=SC2034
 		KIND_CONTEXT="${ctx}"
 		return 0
 	fi

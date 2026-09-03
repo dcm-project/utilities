@@ -60,5 +60,22 @@ CLI_VERSION_FILE ?= dcm-cli-version.json
 cli-version: ## Write DCM CLI version info to JSON file
 	@DCM_BIN="$${DCM_CLI_PATH:-}"; if [[ -z "$$DCM_BIN" ]]; then if command -v dcm &>/dev/null; then DCM_BIN="$$(command -v dcm)"; elif [[ -x bin/dcm ]]; then DCM_BIN="bin/dcm"; else echo "ERROR: dcm binary not found (set DCM_CLI_PATH or run make download-cli)"; exit 1; fi; fi; RAW="$$("$$DCM_BIN" version 2>&1)"; echo "$$RAW" | awk '/^dcm version/{v=$$0; sub(/^dcm version /,"",v)} /commit:/{sub(/^ *commit: */,""); c=$$0} /built:/{sub(/^ *built: */,""); b=$$0} /go:/{sub(/^ *go: */,""); g=$$0} END{printf "{\"version\":\"%s\",\"commit\":\"%s\",\"built\":\"%s\",\"go\":\"%s\"}\n",v,c,b,g}' | jq . > $(CLI_VERSION_FILE); echo "==> Wrote $(CLI_VERSION_FILE)"; cat $(CLI_VERSION_FILE)
 
-lint: ## Lint all shell scripts with ShellCheck
-	shellcheck scripts/*.sh scripts/kind/*.sh tests/*.sh
+SHELL_SCRIPTS = scripts/*.sh scripts/kind/*.sh scripts/compose/*.sh scripts/kubevirt/*.sh tests/*.sh
+SHELLCHECK_BIN := $(shell command -v shellcheck 2>/dev/null)
+ifeq ($(SHELLCHECK_BIN),)
+CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
+SHELLCHECK = $(CONTAINER_ENGINE) run --rm -v "$(CURDIR):/mnt" -w /mnt docker.io/koalaman/shellcheck:stable -x
+else
+SHELLCHECK = $(SHELLCHECK_BIN) -x
+endif
+
+lint: ## Lint all shell scripts with ShellCheck (uses a container if shellcheck is not installed)
+	@command -v shellcheck >/dev/null 2>&1 || { \
+		command -v $(firstword $(SHELLCHECK)) >/dev/null 2>&1 || { \
+			echo "ERROR: shellcheck not found and no container engine (podman/docker) available"; \
+			echo "Install shellcheck (e.g. apt install shellcheck) or podman/docker"; \
+			exit 1; \
+		}; \
+		echo "==> shellcheck not found locally; using $(firstword $(SHELLCHECK))"; \
+	}
+	$(SHELLCHECK) $(SHELL_SCRIPTS)

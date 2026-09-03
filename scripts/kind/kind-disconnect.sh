@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# shellcheck source=kind-env.sh
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/kind-env.sh"
 if ! kind_resolve_from_context; then
 	exit 0
@@ -39,6 +39,7 @@ fi
 
 for network in ${NETWORKS}; do
 	if "${CONTAINER_ENGINE}" network inspect "${network}" >/dev/null 2>&1; then
+		# shellcheck disable=SC2016
 		if "${CONTAINER_ENGINE}" inspect "${KIND_NODE}" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
 			| grep -qw "${network}"; then
 			echo "Disconnecting ${KIND_NODE} from ${network}"

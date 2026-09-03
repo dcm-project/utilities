@@ -18,6 +18,6 @@ See `CLAUDE.md` → "Shell Conventions" for the full list (logging helpers, argu
 ## Linting
 Validate all scripts with ShellCheck before committing:
 ```bash
-shellcheck scripts/*.sh scripts/kind/*.sh
+shellcheck scripts/*.sh scripts/kind/*.sh scripts/compose/*.sh scripts/kubevirt/*.sh
 ```
 CI runs ShellCheck on changed `*.sh` files via `.github/workflows/lint.yaml`.

@@ -19,7 +19,7 @@ When making changes in a PR, always check whether `CLAUDE.md`, `README.md`, and 
 ## Linting
 
 ```bash
-shellcheck scripts/*.sh scripts/kind/*.sh tests/*.sh
+shellcheck scripts/*.sh scripts/kind/*.sh scripts/compose/*.sh scripts/kubevirt/*.sh tests/*.sh
 ```
 
 CI runs ShellCheck on changed `*.sh` files via `.github/workflows/lint.yaml` (only on PRs/pushes to `main`, only on changed files). Always validate locally before pushing.
@@ -50,13 +50,15 @@ When a non-main version is specified, `--control-plane-branch` is auto-derived t
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
-## Kind + Compose Scripts (`scripts/kind/`)
+## Local dev scripts
 
-Shared bash helpers for Kind + compose local dev (kubeconfig rewrite, network connect/disconnect,
-KubeVirt install). Consumed by control-plane and environment-agent Makefiles via
-`KIND_SCRIPTS_DIR` (typically `../utilities/scripts/kind`).
+| Path | Purpose |
+|------|---------|
+| `scripts/kind/` | Kind + compose networking (kubeconfig, connect/disconnect) |
+| `scripts/compose/` | Compose network teardown (not Kind-specific) |
+| `scripts/kubevirt/` | KubeVirt install on any cluster (`kubectl` context) |
 
-See `scripts/kind/README.md` for env vars (`COMPOSE_NETWORK`, `KUBECONFIG_OUT`, `DEPLOY_ROOT`).
+See each directory's `README.md` for env vars. Consumer repos set `UTILITIES_DIR ?= ../utilities`.
 
 ### Provider Registry
 
