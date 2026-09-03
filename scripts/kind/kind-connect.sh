@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Connect the Kind control-plane node to a compose network (kubernetes alias).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/kind-env.sh"
+kind_resolve_from_context || exit 1
+
+if [[ -z "${COMPOSE_NETWORK:-}" ]]; then
+	echo "Error: COMPOSE_NETWORK is required (e.g. control-plane_default or environment-agent_default)" >&2
+	exit 1
+fi
+
+ALIAS="${KIND_NETWORK_ALIAS:-kubernetes}"
+
+kind_pick_engine "${KIND_NODE}" "${COMPOSE_NETWORK}"
+
+# shellcheck disable=SC2016
+if "${CONTAINER_ENGINE}" inspect "${KIND_NODE}" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
+	| grep -qw "${COMPOSE_NETWORK}"; then
+	# shellcheck disable=SC2016
+	if "${CONTAINER_ENGINE}" inspect "${KIND_NODE}" \
+		--format '{{range $net, $cfg := .NetworkSettings.Networks}}{{if eq $net "'"${COMPOSE_NETWORK}"'"}}{{range $cfg.Aliases}}{{.}} {{end}}{{end}}{{end}}' \
+		| grep -qw "${ALIAS}"; then
+		echo "Kind node already connected to '${COMPOSE_NETWORK}' with alias '${ALIAS}'."
+		exit 0
+	fi
+	echo "Kind node is on '${COMPOSE_NETWORK}' but missing alias '${ALIAS}'; reconnecting with alias"
+	"${CONTAINER_ENGINE}" network disconnect -f "${COMPOSE_NETWORK}" "${KIND_NODE}"
+fi
+
+echo "Connecting ${KIND_NODE} on ${CONTAINER_ENGINE} to ${COMPOSE_NETWORK} (alias: ${ALIAS})"
+"${CONTAINER_ENGINE}" network connect --alias "${ALIAS}" "${COMPOSE_NETWORK}" "${KIND_NODE}"
+echo "Done."

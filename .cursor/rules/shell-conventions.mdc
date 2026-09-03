@@ -13,10 +13,11 @@ See `CLAUDE.md` → "Shell Conventions" for the full list (logging helpers, argu
 - Use `[[ ]]` for conditionals, not `[ ]`
 - Subshells with `$()`, not backticks
 - Shebang is always `#!/usr/bin/env bash`
+- Sourced libraries (e.g. `scripts/kind/kind-env.sh`) use `# shellcheck shell=bash` instead of a shebang
 
 ## Linting
 Validate all scripts with ShellCheck before committing:
 ```bash
-shellcheck scripts/*.sh
+shellcheck scripts/*.sh scripts/kind/*.sh scripts/compose/*.sh scripts/kubevirt/*.sh
 ```
 CI runs ShellCheck on changed `*.sh` files via `.github/workflows/lint.yaml`.

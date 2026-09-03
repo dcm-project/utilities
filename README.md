@@ -7,6 +7,9 @@ Common scripts and tooling shared across the [DCM](https://github.com/dcm-projec
 | Path | Description |
 |------|-------------|
 | `scripts/deploy-dcm.sh` | Deploy, health-check, and tear down the full DCM stack via podman-compose |
+| `scripts/kind/` | Kind + compose networking (kubeconfig rewrite, network connect/disconnect) |
+| `scripts/compose/` | Compose network teardown (disconnect members, remove networks) |
+| `scripts/kubevirt/` | KubeVirt install on any Kubernetes cluster |
 | `providers/` | Service provider registry — one `.conf` file per provider |
 | `dcm-versions.json` | Example output of container version resolution (gitignored) |
 | `tests/run-e2e.sh` | Test harness: deploy, run tests, teardown |
@@ -80,6 +83,16 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 ```
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
+
+## Local dev scripts
+
+Shared helpers for control-plane and environment-agent compose + Kind workflows.
+
+| Path | Description |
+|------|-------------|
+| [scripts/kind/](scripts/kind/README.md) | Connect Kind to compose and kubeconfig for `https://kubernetes:6443` |
+| [scripts/compose/](scripts/compose/README.md) | `network-teardown.sh disconnect` / `remove` around compose down |
+| [scripts/kubevirt/](scripts/kubevirt/README.md) | Install KubeVirt on the current `kubectl` context |
 
 ## E2E Tests
 
@@ -181,7 +194,7 @@ Available prompts: `@deploy-dcm`, `@tear-down`, `@check-versions`, `@troubleshoo
 Shell scripts are linted with [ShellCheck](https://www.shellcheck.net/). CI runs ShellCheck automatically on PRs against changed `*.sh` files.
 
 ```bash
-shellcheck scripts/*.sh tests/*.sh
+make lint   # uses local shellcheck, or koalaman/shellcheck via podman/docker
 ```
 ## License
 
