@@ -17,6 +17,10 @@ KUBEVIRT_VERSION="${KUBEVIRT_VERSION:-v1.5.0}"
 
 echo "Installing KubeVirt ${KUBEVIRT_VERSION} on context ${KUBE_CONTEXT}"
 kubectl --context "${KUBE_CONTEXT}" apply -f "https://github.com/kubevirt/kubevirt/releases/download/${KUBEVIRT_VERSION}/kubevirt-operator.yaml"
+
+echo "Waiting for KubeVirt CRDs to become established..."
+kubectl --context "${KUBE_CONTEXT}" wait --for=condition=Established crd/kubevirts.kubevirt.io --timeout=300s
+
 kubectl --context "${KUBE_CONTEXT}" apply -f "https://github.com/kubevirt/kubevirt/releases/download/${KUBEVIRT_VERSION}/kubevirt-cr.yaml"
 
 echo "Waiting for KubeVirt to become available..."

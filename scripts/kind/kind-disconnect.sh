@@ -43,7 +43,7 @@ for network in ${NETWORKS}; do
 		if "${CONTAINER_ENGINE}" inspect "${KIND_NODE}" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
 			| grep -qw "${network}"; then
 			echo "Disconnecting ${KIND_NODE} from ${network}"
-			"${CONTAINER_ENGINE}" network disconnect -f "${network}" "${KIND_NODE}" 2>/dev/null || true
+			"${CONTAINER_ENGINE}" network disconnect -f "${network}" "${KIND_NODE}"
 		fi
 	fi
 done

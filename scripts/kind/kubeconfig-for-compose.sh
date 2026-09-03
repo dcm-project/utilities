@@ -44,6 +44,6 @@ fi
 kubectl config view --minify --flatten --context "${KIND_CONTEXT}" \
 	| sed -E "s|https://[^:]+:[0-9]+|https://${ALIAS}:6443|" \
 	> "${OUT_FILE}"
-chmod 644 "${OUT_FILE}"
+chmod 600 "${OUT_FILE}"
 
 echo "Wrote ${OUT_FILE} (context: ${KIND_CONTEXT})"

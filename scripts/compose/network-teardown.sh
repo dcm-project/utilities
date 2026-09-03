@@ -26,7 +26,20 @@ resolve_networks() {
 	fi
 }
 
+network_on_engine() {
+	local engine="$1"
+	local network="$2"
+
+	case "${engine}" in
+		podman) podman network exists "${network}" 2>/dev/null ;;
+		docker) docker network inspect "${network}" >/dev/null 2>&1 ;;
+		*) return 1 ;;
+	esac
+}
+
 pick_engine() {
+	local candidate network
+
 	if [[ -n "${CONTAINER_ENGINE:-}" ]]; then
 		if command -v "${CONTAINER_ENGINE}" >/dev/null 2>&1; then
 			return 0
@@ -34,21 +47,25 @@ pick_engine() {
 		echo "Error: CONTAINER_ENGINE=${CONTAINER_ENGINE} not found" >&2
 		return 1
 	fi
+
 	for candidate in podman docker; do
-		if command -v "${candidate}" >/dev/null 2>&1; then
-			CONTAINER_ENGINE="${candidate}"
-			return 0
+		if ! command -v "${candidate}" >/dev/null 2>&1; then
+			continue
 		fi
+		for network in ${NETWORKS}; do
+			if network_on_engine "${candidate}" "${network}"; then
+				CONTAINER_ENGINE="${candidate}"
+				return 0
+			fi
+		done
 	done
-	echo "Error: no container engine found (podman or docker)" >&2
+
+	echo "Error: no container engine can access the target compose network(s)" >&2
 	return 1
 }
 
 pick_engine_optional() {
-	if pick_engine; then
-		return 0
-	fi
-	return 1
+	pick_engine || return 1
 }
 
 cmd_disconnect() {
@@ -63,7 +80,7 @@ cmd_disconnect() {
 			while IFS= read -r container; do
 				[[ -z "${container}" ]] && continue
 				echo "Disconnecting ${container} from ${network}"
-				podman network disconnect -f "${network}" "${container}" 2>/dev/null || true
+				podman network disconnect -f "${network}" "${container}"
 			done < <(podman ps -a --filter "network=${network}" -q 2>/dev/null)
 		elif [[ "${CONTAINER_ENGINE}" == docker ]]; then
 			if ! docker network inspect "${network}" >/dev/null 2>&1; then
@@ -72,7 +89,7 @@ cmd_disconnect() {
 			while IFS= read -r container; do
 				[[ -z "${container}" ]] && continue
 				echo "Disconnecting ${container} from ${network}"
-				docker network disconnect "${network}" "${container}" --force 2>/dev/null || true
+				docker network disconnect "${network}" "${container}" --force
 			done < <(docker ps -a --filter "network=${network}" -q 2>/dev/null)
 		fi
 	done

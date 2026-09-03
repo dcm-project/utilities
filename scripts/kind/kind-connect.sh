@@ -20,8 +20,15 @@ kind_pick_engine "${KIND_NODE}" "${COMPOSE_NETWORK}"
 # shellcheck disable=SC2016
 if "${CONTAINER_ENGINE}" inspect "${KIND_NODE}" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
 	| grep -qw "${COMPOSE_NETWORK}"; then
-	echo "Kind node already connected to '${COMPOSE_NETWORK}'."
-	exit 0
+	# shellcheck disable=SC2016
+	if "${CONTAINER_ENGINE}" inspect "${KIND_NODE}" \
+		--format '{{range $net, $cfg := .NetworkSettings.Networks}}{{if eq $net "'"${COMPOSE_NETWORK}"'"}}{{range $cfg.Aliases}}{{.}} {{end}}{{end}}{{end}}' \
+		| grep -qw "${ALIAS}"; then
+		echo "Kind node already connected to '${COMPOSE_NETWORK}' with alias '${ALIAS}'."
+		exit 0
+	fi
+	echo "Kind node is on '${COMPOSE_NETWORK}' but missing alias '${ALIAS}'; reconnecting with alias"
+	"${CONTAINER_ENGINE}" network disconnect -f "${COMPOSE_NETWORK}" "${KIND_NODE}"
 fi
 
 echo "Connecting ${KIND_NODE} on ${CONTAINER_ENGINE} to ${COMPOSE_NETWORK} (alias: ${ALIAS})"
