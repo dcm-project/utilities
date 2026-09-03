@@ -61,4 +61,4 @@ cli-version: ## Write DCM CLI version info to JSON file
 	@DCM_BIN="$${DCM_CLI_PATH:-}"; if [[ -z "$$DCM_BIN" ]]; then if command -v dcm &>/dev/null; then DCM_BIN="$$(command -v dcm)"; elif [[ -x bin/dcm ]]; then DCM_BIN="bin/dcm"; else echo "ERROR: dcm binary not found (set DCM_CLI_PATH or run make download-cli)"; exit 1; fi; fi; RAW="$$("$$DCM_BIN" version 2>&1)"; echo "$$RAW" | awk '/^dcm version/{v=$$0; sub(/^dcm version /,"",v)} /commit:/{sub(/^ *commit: */,""); c=$$0} /built:/{sub(/^ *built: */,""); b=$$0} /go:/{sub(/^ *go: */,""); g=$$0} END{printf "{\"version\":\"%s\",\"commit\":\"%s\",\"built\":\"%s\",\"go\":\"%s\"}\n",v,c,b,g}' | jq . > $(CLI_VERSION_FILE); echo "==> Wrote $(CLI_VERSION_FILE)"; cat $(CLI_VERSION_FILE)
 
 lint: ## Lint all shell scripts with ShellCheck
-	shellcheck scripts/*.sh tests/*.sh
+	shellcheck scripts/*.sh scripts/kind/*.sh tests/*.sh

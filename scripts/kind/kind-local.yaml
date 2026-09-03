@@ -1,0 +1,13 @@
+# Kind config for local dev: maps NodePorts to localhost (agent 30081, NATS 30422).
+# Cluster name is set by kind create --name (see scripts/kind/README.md).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30081
+        hostPort: 30081
+        protocol: TCP
+      - containerPort: 30422
+        hostPort: 30422
+        protocol: TCP
