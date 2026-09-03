@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -80,6 +81,53 @@ func doContainerSPRequest(method, path string, body string) (*http.Response, err
 	}
 
 	return httpClient.Do(req)
+}
+
+// expectRFC9457Problem asserts an RFC 9457 problem+json response (FLPATH-4720/4721)
+// and returns the decoded ProblemDetail struct.
+func expectRFC9457Problem(resp *http.Response, want problemDetailExpectation) ProblemDetail {
+	GinkgoHelper()
+	Expect(resp.StatusCode).To(Equal(want.Status))
+
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	Expect(err).NotTo(HaveOccurred(), "Content-Type must be a valid media type, got %q", resp.Header.Get("Content-Type"))
+	Expect(mediaType).To(Equal("application/problem+json"),
+		"expected application/problem+json, got %q", resp.Header.Get("Content-Type"))
+
+	var problem ProblemDetail
+	decodeJSON(resp, &problem)
+
+	Expect(problem.Type).To(Equal(problemTypeBaseURI + want.TypeSuffix))
+	Expect(problem.Title).To(Equal(want.Title))
+	Expect(problem.Status).To(Equal(want.Status))
+	if want.Detail != "" {
+		Expect(problem.Detail).To(Equal(want.Detail))
+	} else {
+		Expect(problem.Detail).NotTo(BeEmpty())
+	}
+
+	return problem
+}
+
+// decodeContainerProblemDetail decodes a container SP multi-error problem body.
+func decodeContainerProblemDetail(resp *http.Response) ContainerProblemDetail {
+	GinkgoHelper()
+	var problem ContainerProblemDetail
+	decodeJSON(resp, &problem)
+	return problem
+}
+
+// readContainerProblemDetail asserts HTTP status and problem+json, then decodes the body.
+func readContainerProblemDetail(resp *http.Response, wantStatus int) ContainerProblemDetail {
+	GinkgoHelper()
+	Expect(resp.StatusCode).To(Equal(wantStatus))
+
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	Expect(err).NotTo(HaveOccurred(), "Content-Type must be a valid media type, got %q", resp.Header.Get("Content-Type"))
+	Expect(mediaType).To(Equal("application/problem+json"),
+		"expected application/problem+json, got %q", resp.Header.Get("Content-Type"))
+
+	return decodeContainerProblemDetail(resp)
 }
 
 // createTestContainer creates a container via the SP API and returns the parsed response body.

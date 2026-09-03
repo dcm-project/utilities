@@ -131,15 +131,37 @@ var _ = Describe("ACM Cluster SP API", Label("sp", "acm-cluster"), func() {
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
 		})
 
-		It("returns RFC 7807 problem+json on validation errors", func() {
+	})
+
+	Context("RFC 9457 error format", Label("contract"), func() {
+		It("returns problem+json with status and project URI on validation error", func() {
 			resp, err := doAcmClusterSPRequest(http.MethodPost, "/clusters", `{}`)
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 
-			var problem map[string]interface{}
-			decodeJSON(resp, &problem)
-			Expect(problem).To(HaveKey("type"))
-			Expect(problem).To(HaveKey("title"))
+			expectRFC9457Problem(resp, problemDetailExpectation{
+				Status:     http.StatusBadRequest,
+				TypeSuffix: "invalid-argument",
+				Title:      invalidArgumentTitle,
+			})
+		})
+
+		It("returns problem+json on not found", func() {
+			requireKubectl()
+			_, err := runKubectl("get", "crd", "hostedclusters.hypershift.openshift.io")
+			if err != nil {
+				Skip("HyperShift CRDs required — without them GET returns 500 instead of 404")
+			}
+
+			resp, err := doAcmClusterSPRequest(http.MethodGet, "/clusters/nonexistent-e2e-rfc9457", "")
+			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
+
+			expectRFC9457Problem(resp, problemDetailExpectation{
+				Status:     http.StatusNotFound,
+				TypeSuffix: "not-found",
+				Title:      notFoundTitle,
+			})
 		})
 	})
 

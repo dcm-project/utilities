@@ -176,6 +176,55 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 		})
 	})
 
+	Context("RFC 9457 error format", Label("contract"), func() {
+		It("returns problem+json with status and project URI on validation error", func() {
+			resp, err := doContainerSPRequest(http.MethodPost, "/containers", `{}`)
+			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
+
+			expectRFC9457Problem(resp, problemDetailExpectation{
+				Status:     http.StatusBadRequest,
+				TypeSuffix: "invalid-argument",
+				Title:      invalidArgumentTitle,
+			})
+		})
+
+		It("returns errors array on multi-field validation failure", func() {
+			body := `{
+				"spec": {
+					"service_type": "container",
+					"metadata": {
+						"name": "e2e-multi-err",
+						"labels": {"dcm.project/managed-by": "bad"}
+					},
+					"image": {"reference": "docker.io/library/nginx:alpine"},
+					"resources": {
+						"cpu": {"min": 10, "max": 5},
+						"memory": {"min": "128MB", "max": "256MB"}
+					}
+				}
+			}`
+			resp, err := doContainerSPRequest(http.MethodPost, "/containers", body)
+			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
+
+			problem := readContainerProblemDetail(resp, http.StatusBadRequest)
+			Expect(problem.ProblemDetail).To(Equal(ProblemDetail{
+				Type:   problemTypeBaseURI + "invalid-argument",
+				Title:  invalidArgumentTitle,
+				Status: http.StatusBadRequest,
+				Detail: containerMultiErrorDetail,
+			}))
+			Expect(problem.Errors).To(HaveLen(2))
+			Expect(problem.Errors[0].Detail).To(ContainSubstring("cpu.min"))
+			Expect(problem.Errors[0].Pointer).NotTo(BeNil())
+			Expect(*problem.Errors[0].Pointer).To(Equal("#/spec/resources/cpu/min"))
+			Expect(problem.Errors[1].Detail).To(ContainSubstring("dcm.project/managed-by"))
+			Expect(problem.Errors[1].Pointer).NotTo(BeNil())
+			Expect(*problem.Errors[1].Pointer).To(Equal("#/spec/metadata/labels/dcm.project~1managed-by"))
+		})
+	})
+
 	Context("validation errors", func() {
 		It("rejects an empty body", func() {
 			resp, err := doContainerSPRequest(http.MethodPost, "/containers", "")
