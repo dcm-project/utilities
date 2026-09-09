@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/kind-env.sh"
-if ! kind_resolve_from_context; then
+if ! kind_try_resolve_from_context; then
 	exit 0
 fi
 

@@ -34,6 +34,27 @@ kind_resolve_from_context() {
 	return 1
 }
 
+# Same as kind_resolve_from_context but returns 1 silently when the context is not Kind.
+kind_try_resolve_from_context() {
+	KIND_NODE=""
+	KIND_CONTEXT=""
+	if ! command -v kubectl >/dev/null 2>&1; then
+		return 1
+	fi
+	local ctx
+	ctx="$(kubectl config current-context 2>/dev/null || true)"
+	[[ -z "${ctx}" ]] && return 1
+	if [[ "${ctx}" =~ ^kind-(.*)$ ]]; then
+		local name="${BASH_REMATCH[1]}"
+		# shellcheck disable=SC2034
+		KIND_NODE="${name}-control-plane"
+		# shellcheck disable=SC2034
+		KIND_CONTEXT="${ctx}"
+		return 0
+	fi
+	return 1
+}
+
 # Pick the container engine that can see both the Kind node and the compose network.
 # Kind and compose must use the same runtime (docker vs podman).
 kind_pick_engine() {

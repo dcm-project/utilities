@@ -41,11 +41,16 @@ pick_engine() {
 	local candidate network
 
 	if [[ -n "${CONTAINER_ENGINE:-}" ]]; then
-		if command -v "${CONTAINER_ENGINE}" >/dev/null 2>&1; then
-			return 0
+		if ! command -v "${CONTAINER_ENGINE}" >/dev/null 2>&1; then
+			echo "Error: CONTAINER_ENGINE=${CONTAINER_ENGINE} not found" >&2
+			return 1
 		fi
-		echo "Error: CONTAINER_ENGINE=${CONTAINER_ENGINE} not found" >&2
-		return 1
+		for network in ${NETWORKS}; do
+			if network_on_engine "${CONTAINER_ENGINE}" "${network}"; then
+				return 0
+			fi
+		done
+		echo "warning: CONTAINER_ENGINE=${CONTAINER_ENGINE} cannot access compose network(s); auto-detecting runtime" >&2
 	fi
 
 	for candidate in podman docker; do
