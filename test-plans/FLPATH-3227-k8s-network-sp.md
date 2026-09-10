@@ -94,11 +94,15 @@ Add or execute in the SP integration plan, not in utilities E2E:
 ## Prerequisites
 
 - OpenShift or Kubernetes cluster; kubeconfig on deploy host
+- Cluster CLI: set `CLUSTER_CLI` to `oc` (OCP) or `kubectl` (upstream K8s).
+  Default: first available on `PATH` (`oc` preferred when both exist)
 - DCM stack via `deploy-dcm.sh` with network SP (utilities override until
   control-plane `compose.yaml` adds a profile)
 - Namespace for network Services (default or dedicated, e.g. `dcm-network-test`)
 
 ```bash
+CLUSTER_CLI="${CLUSTER_CLI:-$(command -v oc || command -v kubectl)}"
+
 ./scripts/deploy-dcm.sh \
   --k8s-network-service-provider \
   --kubeconfig ~/.kube/config \
@@ -195,7 +199,7 @@ Minimal POST to `http://localhost:8090/api/v1alpha1/networks`:
 |------|--------|----------|
 | 1 | POST | HTTP 201 |
 | 2 | Poll `GET .../networks/{id}` until `status: READY` or timeout (e.g. 60s) | `status: READY` (ClusterIP should be immediate; polling avoids flake) |
-| 3 | `oc get svc e2e-clusterip-smoke -n <ns>` | `TYPE=ClusterIP`, DCM labels present |
+| 3 | `$CLUSTER_CLI get svc e2e-clusterip-smoke -n <ns>` | `TYPE=ClusterIP`, DCM labels present |
 | 4 | GET response | `kubernetes.type: ClusterIP` |
 
 #### E2E-05: Delete smoke `@lab-default`
@@ -203,7 +207,7 @@ Minimal POST to `http://localhost:8090/api/v1alpha1/networks`:
 | Step | Action | Expected |
 |------|--------|----------|
 | 1 | DELETE network created in E2E-04 | HTTP 204 |
-| 2 | `oc get svc` | Service removed |
+| 2 | `$CLUSTER_CLI get svc -n <ns>` | Service removed |
 | 3 | GET same id | HTTP 404 |
 
 ### Phase 3 — Lab-specific (P1)
@@ -220,7 +224,7 @@ POST with `routing_level: "network"`, no `node_ports`, unique `metadata.name`.
 |------|--------|----------|
 | 1 | POST | HTTP 201 |
 | 2 | Poll GET; initial `status` may be `PENDING` | `status: PENDING` while `status.loadBalancer.ingress` is empty |
-| 3 | `oc get svc` | `TYPE=LoadBalancer`, no external IP / empty ingress |
+| 3 | `$CLUSTER_CLI get svc -n <ns>` | `TYPE=LoadBalancer`, no external IP / empty ingress |
 | 4 | Poll GET for 2 min | Still `PENDING` (**pass** — not a defect on this cluster class) |
 
 **If external IP appears:** cluster has an LB controller — skip this TC or record
@@ -233,12 +237,56 @@ LoadBalancer → READY with MetalLB is **integration-only** (SP repo,
 
 #### E2E-07: Provision via catalog instance `@lab-default`
 
+Mirrors `core_platform_test.go`: discover agent → catalog item → routing policy →
+catalog item instance → verify placement and cluster object.
+
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Create CatalogItem for `network` type | Success |
-| 2 | Create CatalogItemInstance | Placement routes to network SP |
-| 3 | `oc get svc -n <ns>` | Service with DCM labels |
-| 4 | Instance status in DCM | Reflects SP status (READY or PENDING for LB) |
+| 1 | `GET /api/v1alpha1/agents`; find agent where `service_types` contains `network` | Agent name recorded (e.g. `k8s-network-sp`) — same as E2E-02 |
+| 2 | `POST /api/v1alpha1/catalog-items` with `service_type: network` and editable fields for `metadata.name`, `ports` | HTTP 201; `uid` saved |
+| 3 | `POST /api/v1alpha1/policies` — GLOBAL policy with Rego `selected_agent` set to the network agent from step 1 | HTTP 201; policy `id` saved |
+| 4 | `POST /api/v1alpha1/catalog-item-instances` referencing the catalog item and user values (unique `metadata.name`, port 80/TCP) | HTTP 201; `uid` and `run_id` present |
+| 5 | Poll `GET /api/v1alpha1/service-type-instances/{resource_id}` until `status: RUNNING` (or timeout) | Instance reaches RUNNING |
+| 6 | `GET` same instance | `agent_name` matches network agent from step 1 |
+| 7 | `$CLUSTER_CLI get svc <metadata.name> -n <ns>` | Service exists with DCM labels |
+| 8 | Compare instance / STI status with SP network status | Reflects SP status (READY for ClusterIP; PENDING for LB without controller) |
+
+Example catalog item payload (adjust field paths to match deployed schema from E2E-03):
+
+```json
+{
+  "api_version": "v1alpha1",
+  "display_name": "e2e-network-catalog",
+  "spec": {
+    "resources": [{
+      "name": "main",
+      "service_type": "network",
+      "fields": [
+        {"path": "metadata.name", "display_name": "Service Name", "editable": true, "default": "e2e-network-inst"},
+        {"path": "ports[0].name", "editable": false, "default": "http"},
+        {"path": "ports[0].protocol", "editable": false, "default": "TCP"},
+        {"path": "ports[0].port", "editable": false, "default": 80},
+        {"path": "ports[0].target_port", "editable": false, "default": 8080}
+      ]
+    }]
+  }
+}
+```
+
+Example routing policy (package name must be unique per run):
+
+```json
+{
+  "display_name": "e2e-network-policy",
+  "policy_type": "GLOBAL",
+  "priority": 100,
+  "description": "E2E: route to network agent",
+  "rego_code": "package e2e_network\n\nmain := {\"selected_agent\": \"k8s-network-sp\"}"
+}
+```
+
+Reference implementation: `core_platform_test.go` — “discovers the container agent”,
+“creates a routing policy”, “creates a catalog item instance”, “reaches RUNNING status”.
 
 ### Phase 5 — API contract smoke (P2)
 
@@ -265,8 +313,10 @@ Execute when monitoring lands in the SP; do not add parallel TCs in utilities.
 After each manual run or E2E job:
 
 ```bash
+CLUSTER_CLI="${CLUSTER_CLI:-$(command -v oc || command -v kubectl)}"
+
 # Delete DCM-managed Services in test namespace
-oc delete svc -n dcm-network-test -l dcm.project/managed-by=dcm
+$CLUSTER_CLI delete svc -n dcm-network-test -l dcm.project/managed-by=dcm
 
 # Or tear down full stack
 ./scripts/deploy-dcm.sh --tear-down

@@ -77,9 +77,11 @@ Service providers are defined declaratively in `providers/*.conf` files. Each co
 
 **To add a new provider:** drop a `.conf` file in `providers/` and (if needed) add a validation hook function in `deploy-dcm.sh`. No other changes to the deploy script are required — flags, usage, arg parsing, and env exports are all generated from the registry.
 
-Current providers: `kubevirt`, `k8s-container`, `k8s-storage`, `acm-cluster`, `three-tier-app-demo`, `three-tier-app-demo-2`, `three-tier-app-demo-3`.
+Current providers: `kubevirt`, `k8s-container`, `k8s-storage`, `k8s-network`, `acm-cluster`, `three-tier-app-demo`, `three-tier-app-demo-2`, `three-tier-app-demo-3`.
 
-Host ports published for direct SP access (compose overrides): KubeVirt **8081**, k8s-container **8082**, ACM cluster **8083**, three-tier **8084**–**8086**, k8s-container-2/3 **8087**–**8088**, k8s-storage **8089**.
+Host ports published for direct SP access (compose overrides): KubeVirt **8081**, k8s-container **8082**, ACM cluster **8083**, three-tier **8084**–**8086**, k8s-container-2/3 **8087**–**8088**, k8s-storage **8089**, k8s-network **8090**.
+
+**k8s-network:** Not yet in control-plane `compose.yaml`; `providers/k8s-network.conf` uses `tests/compose-k8s-network-sp.yaml` as a full-service override. Enable with `--k8s-network-service-provider` or `--all-service-providers`. Image tag via `K8S_NETWORK_SERVICE_PROVIDER_VERSION` (included in `VERSION_ENV_VARS`).
 
 ### Script Structure
 
