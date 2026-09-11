@@ -99,6 +99,13 @@ Add or execute in the SP integration plan, not in utilities E2E:
 - DCM stack via `deploy-dcm.sh` with network SP (utilities override until
   control-plane `compose.yaml` adds a profile)
 - Namespace for network Services (default or dedicated, e.g. `dcm-network-test`)
+- Host ports **8080** (DCM control-plane) and **8090** (network SP) free before
+  deploy — no leftover stack or other listener on those ports
+
+> **CI note:** On Ecosystem Jenkins `flightpath-dcm-deploy`, the control-plane
+> host port is remapped **8080 → 9080** to avoid conflicts (FLPATH-4421). Use
+> `http://localhost:9080` for control-plane API calls in CI; local deploy uses
+> `8080`. Network SP host port **8090** is unchanged.
 
 ```bash
 CLUSTER_CLI="${CLUSTER_CLI:-$(command -v oc || command -v kubectl)}"
@@ -152,9 +159,10 @@ Environment tags:
 
 | Step | Action | Expected |
 |------|--------|----------|
+| 0 | Verify host ports free (see [Port map](#port-map)); e.g. `ss -tln \| grep -E ':8080\|:8090'` returns nothing on the ports you will use | No conflicting listener (avoids env pollution / false pass) |
 | 1 | `deploy-dcm.sh --k8s-network-service-provider --kubeconfig <path>` | Exit 0 |
 | 2 | `podman ps` | `k8s-network-service-provider` running |
-| 3 | `curl -sf localhost:8080/api/v1alpha1/health` | DCM healthy |
+| 3 | `curl -sf localhost:8080/api/v1alpha1/health` (or `9080` per CI note) | DCM healthy |
 | 4 | `curl -sf localhost:8090/api/v1alpha1/networks/health` | SP healthy (`status: healthy`) |
 
 #### E2E-02: Network agent registered in DCM `@lab-default`
