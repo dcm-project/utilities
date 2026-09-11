@@ -131,6 +131,9 @@ E2E-04+.
 If host 8080 is occupied, use compose override `9080:8080` and set
 `DCM_GATEWAY_URL=http://localhost:9080/api/v1alpha1`.
 
+> Lab compose uses **HTTP only** by design (same as other SP utilities smoke);
+> TLS termination is out of scope for FLPATH-4865.
+
 ## Service type inference (reference)
 
 Used by integration tests and lab notes; not re-tested exhaustively in E2E.
@@ -208,7 +211,7 @@ Minimal POST to `http://localhost:8090/api/v1alpha1/networks`:
 | 1 | POST | HTTP 201 |
 | 2 | Poll `GET .../networks/{id}` until `status: READY` or timeout (e.g. 60s) | `status: READY` (ClusterIP should be immediate; polling avoids flake) |
 | 3 | `$CLUSTER_CLI get svc e2e-clusterip-smoke -n <ns>` | `TYPE=ClusterIP`, DCM labels present |
-| 4 | GET response | `kubernetes.type: ClusterIP` |
+| 4 | GET response | `kubernetes.type: ClusterIP`; `spec.ports[0]` round-trips request: `protocol: TCP`, `port: 80`, `target_port: 8080` |
 
 #### E2E-05: Delete smoke `@lab-default`
 
