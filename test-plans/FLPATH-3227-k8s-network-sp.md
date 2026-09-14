@@ -53,8 +53,8 @@ another layer unless the row below says otherwise.
 | Concern | Unit (SP repo, fake K8s) | Integration (SP repo, real cluster) | E2E (utilities, this plan) |
 |---------|--------------------------|-------------------------------------|----------------------------|
 | Config / defaults | **Owner** — TC-U001–U004 | — | — |
-| Request validation matrix | **Owner** — TC-U020–U026 | — | Smoke only — E2E-08 |
-| Service spec building / inference logic | **Owner** — TC-U010–U016 | — | — |
+| Request validation matrix | **Owner** — TC-U020–U026 | — | Smoke — E2E-08, E2E-11 |
+| Service type inference (all v1 paths) | **Owner** — TC-U010–U016 | TC-I020–I028 | **Owner** — E2E-04, E2E-06, E2E-09–E2E-11 |
 | Status mapping (PENDING/READY/DELETED) | **Owner** — TC-U030–U035 | Verify on cluster — TC-I031–I032 | — |
 | Handler error mapping (409, 404, etc.) | **Owner** — TC-U060–U078 | **Owner** — real K8s — TC-I020–I052 | — |
 | Duplicate Service **name** → 409 | TC-U061 | **Owner** — TC-I025 | — |
@@ -220,6 +220,16 @@ type exists”.
 
 ### Phase 2 — SP API smoke (P0 — `crud` label, requires SP PR #2 on `main`)
 
+Covers each **v1 service-type inference** path once (see [Service type inference](#service-type-inference)):
+
+| Inference case | E2E ID |
+|----------------|--------|
+| ClusterIP (no `routing_level`, no `node_ports`) | E2E-04 |
+| NodePort (`node_ports` present, no `routing_level`) | E2E-09 |
+| LoadBalancer (`routing_level: network`, no `node_ports`) | E2E-06 |
+| LoadBalancer + specified `node_ports` | E2E-10 |
+| `routing_level: application` (unsupported v1) | E2E-11 |
+
 #### E2E-04: Create and get ClusterIP `lab-default`, `crud`, `cluster`
 
 Minimal POST to `http://localhost:8090/api/v1alpha1/networks`:
@@ -248,6 +258,89 @@ Minimal POST to `http://localhost:8090/api/v1alpha1/networks`:
 | 1 | DELETE network created in E2E-04 | HTTP 204 |
 | 2 | `$CLUSTER_CLI get svc -n <ns>` | Service removed |
 | 3 | GET same id | HTTP 404 |
+
+#### E2E-09: Create and get NodePort `lab-default`, `crud`, `cluster`
+
+No `routing_level`; `provider_hints.kubernetes.node_ports` maps port name → NodePort
+(30000–32767). Use a unique `metadata.name` and an unused NodePort for the lab.
+
+```json
+{
+  "spec": {
+    "service_type": "network",
+    "metadata": { "name": "e2e-nodeport-smoke" },
+    "ports": [{ "name": "http", "protocol": "TCP", "port": 80, "target_port": 8080 }],
+    "provider_hints": {
+      "kubernetes": {
+        "node_ports": { "http": 30080 }
+      }
+    }
+  }
+}
+```
+
+| Step | Action | Expected |
+|------|--------|----------|
+| 1 | POST | HTTP 201 |
+| 2 | Poll GET until `status: READY` | `status: READY` |
+| 3 | GET response | `kubernetes.type: NodePort`; port entry includes `node_port: 30080` |
+| 4 | `$CLUSTER_CLI get svc e2e-nodeport-smoke -n <ns>` | `TYPE=NodePort`; `nodePort` 30080 on the service port |
+| 5 | DELETE resource | HTTP 204 (suite cleanup) |
+
+#### E2E-10: LoadBalancer with specified node_ports `lab-default`, `crud`, `cluster`
+
+`routing_level: "network"` with explicit `node_ports` — validates LB type plus
+requested NodePort values on the Service (enhancement NodePort-on-LB example).
+
+```json
+{
+  "spec": {
+    "service_type": "network",
+    "metadata": { "name": "e2e-lb-nodeport-smoke" },
+    "ports": [{ "name": "http", "protocol": "TCP", "port": 80, "target_port": 8080 }],
+    "routing_level": "network",
+    "provider_hints": {
+      "kubernetes": {
+        "node_ports": { "http": 30808 }
+      }
+    }
+  }
+}
+```
+
+| Step | Action | Expected |
+|------|--------|----------|
+| 1 | POST | HTTP 201 |
+| 2 | GET response | `kubernetes.type: LoadBalancer`; `node_port: 30808` on the port |
+| 3 | `$CLUSTER_CLI get svc e2e-lb-nodeport-smoke -n <ns> -o yaml` | `type: LoadBalancer`; `nodePort: 30808` |
+| 4 | Status | `READY` or `PENDING` depending on LB controller (same as E2E-06); type and nodePort assertions still apply |
+| 5 | DELETE resource | HTTP 204 (suite cleanup) |
+
+#### E2E-11: `routing_level: application` returns error `lab-default`, `crud`, `contract`
+
+Ingress / L7 (`routing_level: application`) is **not supported in v1** — expect a
+4xx (typically 400) with RFC 9457 problem body, not a created Service.
+
+```json
+{
+  "spec": {
+    "service_type": "network",
+    "metadata": { "name": "e2e-application-reject" },
+    "ports": [{ "name": "http", "protocol": "TCP", "port": 80, "target_port": 8080 }],
+    "routing_level": "application"
+  }
+}
+```
+
+| Step | Action | Expected |
+|------|--------|----------|
+| 1 | POST | HTTP 400 (or documented unsupported error code from SP) |
+| 2 | `Content-Type` | `application/problem+json` |
+| 3 | Body | RFC 9457: `type`, `title`, `status` |
+| 4 | `$CLUSTER_CLI get svc e2e-application-reject -n <ns>` | Service not created |
+
+Full validation variants (e.g. `application` + `node_ports`) — **SP unit plan
+TC-U020–U026 only**.
 
 ### Phase 3 — Lab-specific (P1)
 
@@ -362,8 +455,8 @@ dcm.project/managed-by=dcm`. Full stack teardown via `run-e2e.sh` (default) or
 | Level | Required tests | Notes |
 |-------|----------------|-------|
 | **Phase A (QE minimum)** | E2E-01–E2E-03 green in CI | Deploy, agent, catalog — no SP CRUD required |
-| **Phase B (QE + epic)** | E2E-01–E2E-07 green | After [SP PR #2](https://github.com/dcm-project/k8s-network-service-provider/pull/2) on `main` + Quay image |
-| **Phase C** | E2E-08 green | RFC 9457 contract |
+| **Phase B (QE + epic)** | E2E-01–E2E-11 green | Full inference matrix + catalog flow; after [SP PR #2](https://github.com/dcm-project/k8s-network-service-provider/pull/2) on `main` + Quay image |
+| **Phase C** | E2E-08, E2E-11 green | RFC 9457 contract |
 | **With monitoring** | SP integration TC-I060–I076 green | Dev-owned; not gating utilities E2E |
 | **Deferred** | UI (FLPATH-4762), E2E-06 on cloud LB clusters | Skip via `no-lb-controller` label |
 
@@ -398,7 +491,7 @@ dcm.project/managed-by=dcm`. Full stack teardown via `run-e2e.sh` (default) or
 | Phase | E2E IDs | Depends on |
 |-------|---------|------------|
 | **A** | E2E-01–03 | This PR (deploy wiring on 8090) |
-| **B** | E2E-04–08 | SP CRUD on `main`, Quay image published |
+| **B** | E2E-04–11 | SP CRUD on `main`, Quay image published |
 
 ## Dev implementation backlog (SP repo — not utilities)
 
