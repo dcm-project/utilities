@@ -60,6 +60,16 @@ Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable over
 
 See each directory's `README.md` for env vars. Consumer repos set `UTILITIES_DIR ?= ../utilities`.
 
+**Operational behavior (keep docs in sync when changing these scripts):**
+
+- `install-kubevirt.sh` — Best-effort skip when `kv` CRs are visible; reminds the operator to
+  verify KubeVirt/CNV is not already installed before running.
+- `kind-disconnect.sh` — Uses `kind_try_resolve_from_context` from `kind-env.sh`; exits 0 when
+  the current context is not Kind.
+- `network-teardown.sh` — Explicit `CONTAINER_ENGINE` is never overridden by auto-detect; the
+  `remove` step may run after compose has deleted networks on that runtime. Auto-detect only when
+  `CONTAINER_ENGINE` is unset.
+
 ### Provider Registry
 
 Service providers are defined declaratively in `providers/*.conf` files. Each conf file specifies:

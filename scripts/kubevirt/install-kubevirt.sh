@@ -18,6 +18,11 @@ kubectl_ctx() {
 	kubectl --context "${KUBE_CONTEXT}" "$@"
 }
 
+echo "Note: verify KubeVirt is not already installed on this cluster before continuing."
+echo "      On OpenShift with CNV, run: oc get kv -A"
+echo "      On vanilla Kubernetes, run: kubectl get kv -n kubevirt"
+echo ""
+
 # OpenShift / CNV: KubeVirt CR lives in openshift-cnv (or another operator namespace).
 if kubectl_ctx get kv -A --no-headers 2>/dev/null | grep -q .; then
 	echo "KubeVirt already installed (skipping install):"

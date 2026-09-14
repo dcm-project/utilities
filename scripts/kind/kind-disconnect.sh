@@ -37,7 +37,12 @@ if ! pick_engine_for_node; then
 	exit 0
 fi
 
-for network in ${NETWORKS}; do
+NETWORKS_ARR=()
+if [[ -n "${NETWORKS}" ]]; then
+	read -r -a NETWORKS_ARR <<< "${NETWORKS}"
+fi
+
+for network in "${NETWORKS_ARR[@]}"; do
 	if "${CONTAINER_ENGINE}" network inspect "${network}" >/dev/null 2>&1; then
 		# shellcheck disable=SC2016
 		if "${CONTAINER_ENGINE}" inspect "${KIND_NODE}" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
