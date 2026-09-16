@@ -8,6 +8,7 @@ Deploy the full DCM stack for E2E testing using `scripts/deploy-dcm.sh`.
 2. **For KubeVirt provider**: `oc` (OCP cluster with CNV installed)
 3. **For k8s container provider**: `oc` or `kubectl` (any Kubernetes cluster)
 4. **For k8s storage provider**: `oc` or `kubectl` (any Kubernetes cluster)
+5. **For k8s network provider**: `oc` or `kubectl` (any Kubernetes cluster)
 
 ## Commands
 
@@ -63,6 +64,17 @@ Deploy the full DCM stack for E2E testing using `scripts/deploy-dcm.sh`.
 ./scripts/deploy-dcm.sh --k8s-storage-service-provider --kubeconfig ~/.kube/config
 ```
 
+### Deploy with k8s Network Service Provider
+```bash
+# Uses utilities compose override (host port 8090) until control-plane adds a profile
+./scripts/deploy-dcm.sh --k8s-network-service-provider --kubeconfig ~/.kube/config
+
+# Optional dedicated namespace for network Services
+./scripts/deploy-dcm.sh --k8s-network-service-provider \
+    --kubeconfig ~/.kube/config \
+    --k8s-network-namespace dcm-network-test
+```
+
 ### Deploy with KubeVirt Service Provider
 ```bash
 ./scripts/deploy-dcm.sh --kubevirt-service-provider --kubeconfig ~/.kube/config
@@ -104,6 +116,8 @@ When any service provider is enabled, the script resolves cluster access in this
 | `KUBEVIRT_VM_NAMESPACE` | `--kubevirt-vm-namespace` |
 | `K8S_CONTAINER_SP_NAMESPACE` | `--k8s-container-namespace` |
 | `K8S_STORAGE_SP_NAMESPACE` | `--k8s-storage-namespace` |
+| `K8S_NETWORK_SP_NAMESPACE` | `--k8s-network-namespace` |
+| `K8S_NETWORK_SERVICE_PROVIDER_VERSION` | (image tag for network SP compose override) |
 | `OPENSHIFT_API` | `--cluster-api` |
 | `OPENSHIFT_USERNAME` | `--cluster-username` |
 | `OPENSHIFT_PASSWORD` | `--cluster-password` |
