@@ -1076,6 +1076,17 @@ fi
 log "Cloning control-plane (repo=${CONTROL_PLANE_REPO}, branch=${CONTROL_PLANE_BRANCH})"
 git clone --branch "${CONTROL_PLANE_BRANCH}" --single-branch --depth 1 "${CONTROL_PLANE_REPO}" "${CONTROL_PLANE_TMP_DIR}"
 
+# control-plane compose services declare env_file: .env (FLPATH-4806); podman-compose
+# requires the file to exist even when using compose default fallbacks.
+if [[ ! -f "${CONTROL_PLANE_TMP_DIR}/deploy/.env" ]]; then
+    if [[ ! -f "${CONTROL_PLANE_TMP_DIR}/deploy/.env.example" ]]; then
+        err "deploy/.env.example not found in cloned control-plane repo"
+        exit 1
+    fi
+    cp "${CONTROL_PLANE_TMP_DIR}/deploy/.env.example" "${CONTROL_PLANE_TMP_DIR}/deploy/.env"
+    info "Created deploy/.env from deploy/.env.example"
+fi
+
 # --- Deploy ---------------------------------------------------------------- #
 
 if [[ "${CLEANUP_ON_FAILURE}" == true ]]; then
