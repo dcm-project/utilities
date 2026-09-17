@@ -14,6 +14,13 @@ Stop and clean up a running DCM deployment.
 ./scripts/deploy-dcm.sh --control-plane-dir /path/to/deploy --tear-down
 ```
 
+### Authenticated stack
+```bash
+./scripts/deploy-dcm.sh --auth-enabled --tear-down
+```
+
+Use the same authentication setting used during deployment so the auth compose profile, including Keycloak, is included in teardown.
+
 ## What Happens
 
 1. Stops all containers via `podman-compose down -v`

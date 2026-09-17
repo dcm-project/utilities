@@ -48,6 +48,19 @@ Deploy the full DCM stack for E2E testing using `scripts/deploy-dcm.sh`.
 ./scripts/deploy-dcm.sh --cleanup-on-failure
 ```
 
+### Deploy with Authentication Enabled
+```bash
+# Starts Keycloak (compose profile auth) and enables JWT validation
+./scripts/deploy-dcm.sh --auth-enabled
+
+# Equivalent via environment (Jenkins uses this today)
+AUTH_DISABLED=false AUTH_ISSUER_URL=http://keycloak:8080/realms/dcm AUTH_JWT_AUDIENCE=dcm-api \
+    ./scripts/deploy-dcm.sh
+
+# Tear down auth-enabled stack with the same flag
+./scripts/deploy-dcm.sh --auth-enabled --tear-down
+```
+
 ### Deploy with k8s Container Service Provider
 ```bash
 # Auto-detects cluster from existing oc/kubectl session
@@ -107,17 +120,23 @@ When any service provider is enabled, the script resolves cluster access in this
 | `OPENSHIFT_API` | `--cluster-api` |
 | `OPENSHIFT_USERNAME` | `--cluster-username` |
 | `OPENSHIFT_PASSWORD` | `--cluster-password` |
+| `AUTH_DISABLED` | Set to `false` to enable auth (same as `--auth-enabled`) |
 
 Flags take precedence over environment variables.
+
+## Compose Credentials
+
+After cloning control-plane, the script creates `deploy/.env` from `deploy/.env.example` if missing. Database and optional auth credentials are written there for compose `env_file: .env` services. Lab defaults match control-plane's `.env.example`; override via shell env vars before running the script.
 
 ## What Happens
 
 1. Clones control-plane (`deploy/compose.yaml`)
-2. Runs `podman-compose up -d`
-3. Verifies all containers are running
-4. Polls `/api/v1alpha1/health` (90s timeout)
-5. Resolves container images to git commit SHAs via Quay.io API
-6. Writes `dcm-versions.json`
+2. Bootstraps `deploy/.env` with DB credentials (and auth credentials when `--auth-enabled`)
+3. Runs `podman-compose up -d`
+4. Verifies all containers are running
+5. Polls `/api/v1alpha1/health` (90s timeout)
+6. Resolves container images to git commit SHAs via Quay.io API
+7. Writes `dcm-versions.json`
 
 ## Output
 

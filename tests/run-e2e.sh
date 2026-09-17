@@ -313,9 +313,9 @@ fi
 # Teardown the stack.
 if [[ "${SKIP_TEARDOWN}" == "false" ]]; then
     log "Tearing down DCM stack"
-    if ! "${DEPLOY_SCRIPT}" --tear-down; then
+    if ! "${DEPLOY_SCRIPT}" --tear-down "${DEPLOY_ARGS[@]+"${DEPLOY_ARGS[@]}"}"; then
         err "Teardown failed (non-fatal) — containers may still be running"
-        err "Manual cleanup: ${DEPLOY_SCRIPT} --tear-down"
+        err "Manual cleanup: ${DEPLOY_SCRIPT} --tear-down ${DEPLOY_ARGS[*]}"
     fi
 else
     log "Skipping teardown (--skip-teardown)"
