@@ -99,6 +99,7 @@ jobs:
             --expect-contains "--kubeconfig" "kubeconfig flag" \
             --expect-contains "--compose-file" "compose-file flag" \
             --expect-contains "--auth-enabled" "auth-enabled flag" \
+            --expect-contains "PODMAN_COMPOSE_IN_POD" "podman-compose networking setting" \
             --expect-contains "--cleanup-on-failure" "cleanup-on-failure flag" \
             --expect-contains "--running-versions" "running-versions flag" \
             --expect-contains "--tear-down" "tear-down flag" \

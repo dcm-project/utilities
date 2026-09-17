@@ -13,6 +13,9 @@ readonly DEFAULT_CONTROL_PLANE_REPO="https://github.com/dcm-project/control-plan
 readonly DEFAULT_CONTROL_PLANE_BRANCH="main"
 readonly DEFAULT_CONTROL_PLANE_TMP_DIR="/tmp/dcm-e2e"
 export COMPOSE_PROJECT_NAME="dcm-e2e"
+# Use a Compose network with service-name DNS. Podman Compose pod mode can
+# isolate services from each other when the pod has no shared network namespace.
+export PODMAN_COMPOSE_IN_POD="${PODMAN_COMPOSE_IN_POD:-false}"
 readonly CONTROL_PLANE_PORT="8080"
 readonly HEALTH_TIMEOUT_SECONDS=90
 readonly HEALTH_POLL_INTERVAL=5
@@ -167,6 +170,7 @@ Environment variables (flags take precedence):
   OPENSHIFT_USERNAME        Same as --cluster-username (default: kubeadmin)
   OPENSHIFT_PASSWORD        Same as --cluster-password
   AUTH_DISABLED             Set to 'false' to enable auth (same effect as --auth-enabled)
+  PODMAN_COMPOSE_IN_POD     Podman Compose pod mode (default: false)
 EOF
 
     # Provider namespace env vars (generated from registry)
