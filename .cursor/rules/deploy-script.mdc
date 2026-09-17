@@ -18,6 +18,11 @@ See `CLAUDE.md` → "Key Script: scripts/deploy-dcm.sh" for the full description
 
 ## Podman / Compose
 
+After cloning control-plane, deploy mode creates `<control-plane-dir>/deploy/.env` from
+`deploy/.env.example` when missing (required by compose `env_file: .env`). Never
+overwrite an existing `deploy/.env`. Fail with a clear error if the example file is
+absent from the cloned repo.
+
 ```bash
 # Bounded log reads (never use --follow)
 podman logs --tail=50 <container>

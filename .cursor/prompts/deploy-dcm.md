@@ -113,11 +113,23 @@ Flags take precedence over environment variables.
 ## What Happens
 
 1. Clones control-plane (`deploy/compose.yaml`)
-2. Runs `podman-compose up -d`
-3. Verifies all containers are running
-4. Polls `/api/v1alpha1/health` (90s timeout)
-5. Resolves container images to git commit SHAs via Quay.io API
-6. Writes `dcm-versions.json`
+2. Creates `deploy/.env` from `deploy/.env.example` when missing (does not overwrite an existing file)
+3. Runs `podman-compose up -d`
+4. Verifies all containers are running
+5. Polls `/api/v1alpha1/health` (90s timeout)
+6. Resolves container images to git commit SHAs via Quay.io API
+7. Writes `dcm-versions.json`
+
+If `deploy/.env.example` is missing from the cloned control-plane repo, deploy exits
+before `podman-compose up`.
+
+## Compose environment file
+
+Control-plane compose services use `env_file: .env`. The deploy script seeds the file
+automatically; you do not need to copy it manually before a normal deploy. To customize
+auth, image versions, or provider settings, edit `<control-plane-dir>/deploy/.env`
+after the first deploy (or pre-create the file before re-running with the same
+`--control-plane-dir`).
 
 ## Output
 

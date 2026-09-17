@@ -69,6 +69,19 @@ curl -v http://localhost:8080/api/v1alpha1/health
 podman-compose -f /tmp/dcm-e2e/deploy/compose.yaml logs --tail=50 control-plane
 ```
 
+### "deploy/.env.example not found in cloned control-plane repo"
+The cloned control-plane checkout is missing `deploy/.env.example` (unexpected for current
+`main` / release branches). Use a valid `--control-plane-branch` or
+`--control-plane-repo`, or upgrade control-plane to a revision that includes the template.
+
+### "Env file at .../deploy/.env does not exist" (podman-compose)
+Usually means an older `deploy-dcm.sh` ran against a control-plane revision that requires
+`env_file: .env` but did not seed the file. Update utilities to a revision that copies
+`deploy/.env.example` after clone, or create the file manually:
+```bash
+cp /tmp/dcm-e2e/deploy/.env.example /tmp/dcm-e2e/deploy/.env
+```
+
 ### Compose file not found
 ```bash
 # Verify clone worked

@@ -39,9 +39,25 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 `scripts/deploy-dcm.sh` automates the full DCM stack lifecycle for E2E testing:
 
 1. Clones the [control-plane](https://github.com/dcm-project/control-plane) repo (`deploy/compose.yaml`)
-2. Starts all services with `podman-compose up`
-3. Polls health endpoints until every service responds 2xx
-4. Resolves running container images to git commit SHAs via the Quay.io API
+2. Creates `deploy/.env` from `deploy/.env.example` when missing (required by control-plane compose `env_file` entries since FLPATH-4806)
+3. Starts all services with `podman-compose up`
+4. Polls health endpoints until every service responds 2xx
+5. Resolves running container images to git commit SHAs via the Quay.io API
+
+### Compose environment file
+
+After cloning control-plane, the script seeds `<control-plane-dir>/deploy/.env` from
+`deploy/.env.example` when the file does not already exist. Control-plane compose
+services declare `env_file: .env`; `podman-compose` requires that file to be present
+even when compose defaults cover most settings.
+
+- An existing `deploy/.env` is never overwritten (manual overrides are preserved).
+- Edit the cloned `deploy/.env` to enable auth, pin image versions, or set provider
+  credentials — see control-plane `deploy/RUN.md` and `deploy/.env.example`.
+- Shell exports and CLI flags (for example `AUTH_DISABLED`, `--kubeconfig`) still apply
+  for compose variable substitution alongside the file.
+- If `deploy/.env.example` is missing from the cloned repo, deploy exits with
+  `deploy/.env.example not found in cloned control-plane repo`.
 
 ### Prerequisites
 

@@ -28,7 +28,14 @@ CI runs ShellCheck on changed `*.sh` files via `.github/workflows/lint.yaml` (on
 
 Deploys the full DCM stack for E2E testing by cloning control-plane (`deploy/compose.yaml`), running `podman-compose up`, and polling health endpoints until all services respond 2xx.
 
-**Flow:** clone control-plane → `podman-compose up -d` → verify containers running → poll `/api/v1alpha1/health` → collect container versions from Quay.io API → write `dcm-versions.json`.
+**Flow:** clone control-plane → seed `deploy/.env` from `deploy/.env.example` when missing → `podman-compose up -d` → verify containers running → poll `/api/v1alpha1/health` → collect container versions from Quay.io API → write `dcm-versions.json`.
+
+**Compose environment file:** Control-plane compose services reference `env_file: .env`
+(FLPATH-4806). After clone, the script copies `deploy/.env.example` to
+`deploy/.env` when the file is absent. An existing file is left unchanged. Deploy
+fails fast if the example template is missing from the cloned repo. Edit the cloned
+`deploy/.env` for auth, version pins, or provider secrets; shell exports and CLI flags
+still apply for compose substitution.
 
 **Modes:** The script has three mutually exclusive modes:
 - **Deploy** (default): full clone + bring-up + health check. Pass `--cleanup-on-failure` to auto-teardown on error (default leaves partial state for debugging).
