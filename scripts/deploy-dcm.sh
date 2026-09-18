@@ -27,6 +27,10 @@ readonly HEALTH_ENDPOINTS=(
 readonly DEFAULT_ACM_CLUSTER_SP_REPO="https://github.com/dcm-project/acm-cluster-service-provider.git"
 readonly DEFAULT_ACM_CLUSTER_SP_BRANCH="main"
 
+podman_compose() {
+    command podman-compose --in-pod "${PODMAN_COMPOSE_IN_POD}" "$@"
+}
+
 readonly QUAY_VERSION_REPO="control-plane"
 readonly VERSION_ENV_VARS=(
     CONTROL_PLANE_VERSION
@@ -273,7 +277,7 @@ tear_down() {
 
     if [[ -d "${deploy_dir}" ]]; then
         info "Stopping containers and removing volumes..."
-        podman-compose -f "${deploy_dir}/deploy/compose.yaml" ${compose_profiles[@]+"${compose_profiles[@]}"} down -v 2>/dev/null || true
+        podman_compose -f "${deploy_dir}/deploy/compose.yaml" ${compose_profiles[@]+"${compose_profiles[@]}"} down -v 2>/dev/null || true
 
         local project_name="${COMPOSE_PROJECT_NAME}"
         local remaining
@@ -428,8 +432,8 @@ verify_health() {
 
     info "Checking container readiness..."
     local expected_services running_services
-    expected_services=$(podman-compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} config --services 2>/dev/null | sort)
-    running_services=$(podman-compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} ps 2>/dev/null | awk 'NR>1 {print $NF}' | sed 's/.*_\(.*\)_[0-9]*/\1/' | sort)
+    expected_services=$(podman_compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} config --services 2>/dev/null | sort)
+    running_services=$(podman_compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} ps 2>/dev/null | awk 'NR>1 {print $NF}' | sed 's/.*_\(.*\)_[0-9]*/\1/' | sort)
 
     local container_failures=()
     while IFS= read -r service; do
@@ -545,7 +549,7 @@ get_running_versions() {
     log "Collecting running container versions"
 
     local container_ids
-    container_ids=$(podman-compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} ps -q 2>/dev/null)
+    container_ids=$(podman_compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} ps -q 2>/dev/null)
 
     if [[ -z "${container_ids}" ]]; then
         err "No running containers found"
@@ -1205,7 +1209,7 @@ log "Preparing deploy directory: ${CONTROL_PLANE_TMP_DIR}"
 
 if [[ -d "${CONTROL_PLANE_TMP_DIR}" ]]; then
     info "Cleaning existing deploy directory..."
-    podman-compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} down -v 2>/dev/null || true
+    podman_compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} down -v 2>/dev/null || true
     rm -rf "${CONTROL_PLANE_TMP_DIR}"
 fi
 
@@ -1231,11 +1235,11 @@ fi
 if [[ "${AUTH_ENABLED}" == true ]]; then
     info "Authentication enabled (compose profile: auth)"
 fi
-podman-compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} up -d
+podman_compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} up -d
 
 echo
 log "Container status"
-podman-compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} ps
+podman_compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} ps
 
 verify_health "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || exit 1
 
