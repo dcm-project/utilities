@@ -52,6 +52,8 @@ When a non-main version is specified, `--control-plane-branch` is auto-derived t
 
 **Control-plane authentication:** Pass `--auth-enabled` (or set `AUTH_DISABLED=false`) to start Keycloak and enable JWT validation. Use the same flag on `--tear-down` when tearing down an auth-enabled stack. The E2E suite currently supports unauthenticated test runs only.
 
+**Podman Compose networking:** The script uses `--in-pod false` by default so services run on the Compose bridge network and resolve service names through its DNS. Set `PODMAN_COMPOSE_IN_POD=true` only when pod-mode networking is required by the environment.
+
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
 ## Local dev scripts

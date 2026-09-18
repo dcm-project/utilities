@@ -88,6 +88,16 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
+### Podman Compose networking
+
+`deploy-dcm.sh` disables Podman Compose pod mode by default so services use the
+Compose bridge network and can resolve each other by service name. To opt into pod
+mode for a compatible environment, set the override explicitly:
+
+```bash
+PODMAN_COMPOSE_IN_POD=true ./scripts/deploy-dcm.sh
+```
+
 ## Local dev scripts
 
 Shared helpers for control-plane and environment-agent compose + Kind workflows.
