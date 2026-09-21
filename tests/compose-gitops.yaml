@@ -1,0 +1,30 @@
+# Compose override for the optional DCM GitOps reconciler.
+# Enabled by scripts/deploy-dcm.sh --gitops.
+
+services:
+  dcm-gitops:
+    image: quay.io/dcm-project/dcm-gitops:${DCM_GITOPS_VERSION:-main}
+    pull_policy: always
+    restart: on-failure
+    env_file: .env
+    environment:
+      DB_TYPE: "pgsql"
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_NAME: "control-plane"
+      DB_USER: ${DB_USER:-admin}
+      DB_PASSWORD: ${DB_PASSWORD:-adminpass}
+      NATS_URL: "nats://nats:4222"
+      LOG_LEVEL: ${GITOPS_LOG_LEVEL:-info}
+      GIT_WORK_DIR: "/data/gitops"
+      POLL_INTERVAL: ${GITOPS_POLL_INTERVAL:-15}
+    volumes:
+      - gitops_data:/data/gitops
+    depends_on:
+      postgres:
+        condition: service_healthy
+      control-plane:
+        condition: service_started
+
+volumes:
+  gitops_data: {}

@@ -98,6 +98,7 @@ jobs:
             --expect-contains "--control-plane-branch" "control-plane-branch flag" \
             --expect-contains "--kubeconfig" "kubeconfig flag" \
             --expect-contains "--compose-file" "compose-file flag" \
+            --expect-contains "--gitops" "gitops flag" \
             --expect-contains "--auth-enabled" "auth-enabled flag" \
             --expect-contains "--cleanup-on-failure" "cleanup-on-failure flag" \
             --expect-contains "--running-versions" "running-versions flag" \

@@ -38,6 +38,7 @@ Deploy passthrough flags (forwarded to deploy-dcm.sh):
   --control-plane-dir PATH       Directory to clone into
   --control-plane-repo URL       Git repo for control-plane
   --cleanup-on-failure         Tear down on deployment failure
+  --gitops                      Enable the dcm-gitops reconciliation container
 
 Service provider flags (forwarded to deploy-dcm.sh):
   --all-service-providers           Enable all SPs
@@ -195,6 +196,9 @@ while [[ $# -gt 0 ]]; do
             DEPLOY_ARGS+=("$1" "$2")
             shift 2 ;;
         --cleanup-on-failure)
+            DEPLOY_ARGS+=("$1")
+            shift ;;
+        --gitops)
             DEPLOY_ARGS+=("$1")
             shift ;;
         --k8s-container-service-provider)

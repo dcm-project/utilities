@@ -82,11 +82,22 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 # 9. Deploy with authentication enabled (Keycloak + JWT validation)
 ./scripts/deploy-dcm.sh --auth-enabled
 
-# 10. Tear down when done
+# 10. Deploy with the GitOps reconciliation container
+./scripts/deploy-dcm.sh --gitops
+
+# 11. Tear down an authenticated stack when done
 ./scripts/deploy-dcm.sh --auth-enabled --tear-down
+
+# Use --gitops during teardown when the reconciler was enabled
+./scripts/deploy-dcm.sh --gitops --tear-down
 ```
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
+
+The optional `--gitops` flag adds the published `quay.io/dcm-project/dcm-gitops` container
+to the Compose stack. The reconciler shares the control-plane PostgreSQL database and
+stores cloned repositories in a named `gitops_data` volume. Set `DCM_GITOPS_VERSION` to
+pin its image independently, or use `--version` to pin all DCM images together.
 
 ## Local dev scripts
 
