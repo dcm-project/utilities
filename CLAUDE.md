@@ -52,6 +52,8 @@ When a non-main version is specified, `--control-plane-branch` is auto-derived t
 
 **Control-plane authentication:** Pass `--auth-enabled` (or set `AUTH_DISABLED=false`) to start Keycloak and enable JWT validation. Use the same flag on `--tear-down` when tearing down an auth-enabled stack. The E2E suite currently supports unauthenticated test runs only.
 
+**GitOps reconciliation:** Pass `--gitops` to add the separate published `dcm-gitops` reconciler container. It uses the same PostgreSQL database as control-plane and persists cloned repositories in the Compose `gitops_data` volume. Set `DCM_GITOPS_VERSION` to pin only that image, or use `--version` to pin all DCM images.
+
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
 ## Local dev scripts

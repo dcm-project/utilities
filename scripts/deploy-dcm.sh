@@ -27,6 +27,7 @@ readonly DEFAULT_ACM_CLUSTER_SP_BRANCH="main"
 readonly QUAY_VERSION_REPO="control-plane"
 readonly VERSION_ENV_VARS=(
     CONTROL_PLANE_VERSION
+    DCM_GITOPS_VERSION
     DCM_UI_VERSION
     KUBEVIRT_SERVICE_PROVIDER_VERSION
     K8S_CONTAINER_SERVICE_PROVIDER_VERSION
@@ -36,6 +37,7 @@ readonly VERSION_ENV_VARS=(
 )
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly GITOPS_COMPOSE_OVERRIDE="${REPO_ROOT}/tests/compose-gitops.yaml"
 
 # --- Provider registry ----------------------------------------------------- #
 #
@@ -117,6 +119,7 @@ Options:
   --control-plane-branch REF     Branch to clone (default: ${DEFAULT_CONTROL_PLANE_BRANCH})
   --control-plane-dir PATH       Directory to clone control-plane into (default: ${DEFAULT_CONTROL_PLANE_TMP_DIR})
   --all-service-providers        Enable all available service providers
+  --gitops                       Enable the dcm-gitops reconciliation container
 EOF
 
     # Provider flags (generated from registry)
@@ -159,6 +162,7 @@ Cluster authentication (when any service provider is enabled):
 
 Environment variables (flags take precedence):
   DCM_VERSION               Same as --version
+  DCM_GITOPS_VERSION        Image tag for dcm-gitops (default: main; --version also pins it)
   CONTROL_PLANE_REPO        Same as --control-plane-repo
   CONTROL_PLANE_BRANCH      Same as --control-plane-branch
   CONTROL_PLANE_TMP_DIR     Same as --control-plane-dir
@@ -751,6 +755,7 @@ RUNNING_VERSIONS=false
 CLEANUP_ON_FAILURE=false
 DEPLOY_ACM_MCE=""
 DEPLOY_CNV=false
+GITOPS_ENABLED=false
 ACM_CLUSTER_SP_REPO="${DEFAULT_ACM_CLUSTER_SP_REPO}"
 ACM_CLUSTER_SP_BRANCH="${DEFAULT_ACM_CLUSTER_SP_BRANCH}"
 DCM_KUBECONFIG="${KUBECONFIG:-}"
@@ -810,6 +815,8 @@ while [[ $# -gt 0 ]]; do
                 PROV_ENABLED[i]=true
             done
             shift ;;
+        --gitops)
+            GITOPS_ENABLED=true; shift ;;
         --deploy-cnv)
             DEPLOY_CNV=true; shift ;;
         --deploy-acm)
@@ -887,6 +894,15 @@ for i in $(seq 0 $((PROV_COUNT - 1))); do
     [[ "${PROV_ENABLED[$i]}" == true ]] || continue
     collect_provider_compose "${i}"
 done
+
+if [[ "${GITOPS_ENABLED}" == true ]]; then
+    if [[ ! -f "${GITOPS_COMPOSE_OVERRIDE}" ]]; then
+        err "GitOps compose override not found: ${GITOPS_COMPOSE_OVERRIDE}"
+        exit 1
+    fi
+    COMPOSE_EXTRA_FILE_ARGS+=("-f" "${GITOPS_COMPOSE_OVERRIDE}")
+    info "Injecting dcm-gitops reconciliation container"
+fi
 
 AUTH_ENABLED=false
 if [[ "${AUTH_ENABLED_EXPLICIT}" == true ]] || [[ "${AUTH_DISABLED:-}" == "false" ]]; then
