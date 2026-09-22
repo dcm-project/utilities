@@ -79,9 +79,9 @@ Service providers are defined declaratively in `providers/*.conf` files. Each co
 
 Current providers: `kubevirt`, `k8s-container`, `k8s-storage`, `k8s-network`, `acm-cluster`, `three-tier-app-demo`, `three-tier-app-demo-2`, `three-tier-app-demo-3`.
 
-Host ports published for direct SP access (compose overrides): KubeVirt **8081**, k8s-container **8082**, ACM cluster **8083**, three-tier **8084**–**8086**, k8s-container-2/3 **8087**–**8088**, k8s-storage **8089**, k8s-network **8090**.
+Host ports published for direct SP access (compose overrides): KubeVirt **8081**, k8s-container **8082**, ACM cluster **8083**, three-tier **8084**–**8086**, k8s-container-2/3 **8087**–**8088**, k8s-storage **8089**. Environment-agent (embedded SPs) typically publishes **8081** when used as a sibling compose stack.
 
-**k8s-network:** Not yet in control-plane `compose.yaml`; `providers/k8s-network.conf` uses `tests/compose-k8s-network-sp.yaml` as a full-service override. Enable with `--k8s-network-service-provider` or `--all-service-providers`. Image tag via `K8S_NETWORK_SERVICE_PROVIDER_VERSION` (included in `VERSION_ENV_VARS`).
+**k8s-network:** Embedded in [environment-agent](https://github.com/dcm-project/environment-agent) (`AGENT_EMBEDDED_SPS=network`). Do not rely on the legacy utilities `--k8s-network-service-provider` / Quay standalone image path ([FLPATH-4881](https://redhat.atlassian.net/browse/FLPATH-4881) obsolete). See `test-plans/FLPATH-3227-k8s-network-sp.md`.
 
 ### Script Structure
 

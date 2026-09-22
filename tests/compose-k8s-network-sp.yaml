@@ -1,8 +1,9 @@
-# Compose override for k8s-network-service-provider.
-# Full service definition until control-plane deploy/compose.yaml adds a profile.
-# Injected by deploy-dcm.sh via providers/k8s-network.conf.
+# LEGACY compose override for standalone k8s-network-service-provider.
+# Network is now embedded in environment-agent (AGENT_EMBEDDED_SPS=network).
+# Prefer agent deploy; Quay standalone image is not a QE dependency (FLPATH-4881 Obsolete).
+# Injected by deploy-dcm.sh via providers/k8s-network.conf when the legacy flag is used.
 #
-# Host port 8090 follows the DCM SP port sequence (8082–8089 taken by other SPs).
+# Host port 8090 — only if using this legacy path.
 
 services:
   k8s-network-service-provider:
