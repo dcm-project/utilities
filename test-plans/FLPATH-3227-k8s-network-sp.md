@@ -34,8 +34,17 @@ happy-path checks against a real cluster (Kind or OCP) and DCM stack.
 case below maps to one or more `It` blocks. Manual curl/kubectl steps are
 reference only for debugging — not the deliverable.
 
+> **Delivery note:** This PR may land the plan (and legacy deploy notes) before
+> `tests/e2e/network_sp_api_test.go` exists. Until that file lands (here or a
+> linked follow-up PR), treat Phase A/B as **planned**, not executed.
+
 It does **not** duplicate unit/integration coverage owned by the environment-agent
 (and any leftover standalone SP repo plans). See [Test layer ownership](#test-layer-ownership).
+
+**Auth / tenant isolation:** Out of scope for FLPATH-4865. Lab runs with
+`AUTH_DISABLED=true`. Allowed/denied auth coverage lives in
+[FLPATH-3254](./FLPATH-3254-dcm-authentication-test-plan.md) (and related auth
+stories such as FLPATH-4645).
 
 ### API conventions (match existing utilities E2E)
 
@@ -153,13 +162,23 @@ If host 8080 is occupied, use compose override `9080:8080` and set
 
 ## Service type inference (reference)
 
-| `routing_level` | `node_ports` | K8s Service type | Expected DCM status |
-|-----------------|--------------|------------------|---------------------|
-| omitted | No | ClusterIP | READY |
-| omitted | Yes | NodePort | READY |
-| `network` | No | LoadBalancer | PENDING (no LB) / READY (with MetalLB) |
-| `network` | Yes | LoadBalancer | PENDING (no LB) / READY (with MetalLB) |
-| `application` | — | — | Error (Ingress not supported v1) |
+Status vocabulary (do not conflate):
+
+| Layer | Field | Typical values | Owner of assertion |
+|-------|-------|----------------|--------------------|
+| **Control-plane** instance / STI | lifecycle status | `RUNNING`, … | E2E polls until `RUNNING` (same as `core_platform_test.go`) |
+| **Network SP** resource status | SP status | `READY`, `PENDING`, `DELETED` | Assert against **cluster class** below — not a free “either” |
+
+| `routing_level` | `node_ports` | K8s Service type | CP instance | Network SP status |
+|-----------------|--------------|------------------|-------------|-------------------|
+| omitted | No | ClusterIP | RUNNING | READY |
+| omitted | Yes | NodePort | RUNNING | READY |
+| `network` | No | LoadBalancer | RUNNING | `PENDING` if `no-lb-controller`; `READY` if MetalLB/cloud LB |
+| `network` | Yes | LoadBalancer | RUNNING | same as row above |
+| `application` | — | — | create fails | Error (Ingress not supported v1) |
+
+PENDING is **not** a universal pass or fail — it depends on LB availability and
+provider/NATS wiring (see KB `facts/flightpath/dcm.md`).
 
 ## E2E test cases (utilities)
 
@@ -228,9 +247,10 @@ spec (`metadata.name`: `e2e-clusterip-smoke`, port 80 → 8080).
 | Step | Action | Expected |
 |------|--------|----------|
 | 1 | Create catalog item + routing policy + instance | HTTP 201 |
-| 2 | Poll instance / STI until RUNNING (or timeout) | Instance RUNNING |
-| 3 | `$CLUSTER_CLI get svc e2e-clusterip-smoke -n <ns>` | `TYPE=ClusterIP`, DCM labels |
-| 4 | Spec round-trip on instance / cluster object | `protocol: TCP`, `port: 80`, `target_port: 8080` |
+| 2 | Poll CP instance / STI until RUNNING (or timeout) | CP status `RUNNING` |
+| 3 | GET instance (and STI if exposed) | Spec matches create; network SP status `READY` |
+| 4 | `$CLUSTER_CLI get svc e2e-clusterip-smoke -n <ns>` | `TYPE=ClusterIP`, DCM labels |
+| 5 | Spec round-trip on instance / cluster object | `protocol: TCP`, `port: 80`, `target_port: 8080` |
 
 #### E2E-05: Delete smoke `lab-default`, `crud`, `cluster`
 
@@ -262,9 +282,10 @@ No `routing_level`; `provider_hints.kubernetes.node_ports` maps port name → No
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Provision via CP | Instance RUNNING |
-| 2 | `$CLUSTER_CLI get svc e2e-nodeport-smoke -n <ns>` | `TYPE=NodePort`; `nodePort` 30080 |
-| 3 | Cleanup | Service deleted |
+| 1 | Provision via CP | HTTP 201; poll CP until `RUNNING` |
+| 2 | GET instance / STI | Spec includes `node_ports`; network SP status `READY` |
+| 3 | `$CLUSTER_CLI get svc e2e-nodeport-smoke -n <ns>` | `TYPE=NodePort`; `nodePort` 30080 |
+| 4 | Cleanup | Service + CP resources deleted |
 
 #### E2E-10: LoadBalancer with specified node_ports `lab-default`, `crud`, `cluster`
 
@@ -272,10 +293,11 @@ No `routing_level`; `provider_hints.kubernetes.node_ports` maps port name → No
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Provision via CP | Instance created |
-| 2 | `$CLUSTER_CLI get svc … -o yaml` | `type: LoadBalancer`; `nodePort` as requested |
-| 3 | Status | `READY` or `PENDING` depending on LB controller |
-| 4 | Cleanup | Service deleted |
+| 1 | Provision via CP | HTTP 201; poll CP until `RUNNING` |
+| 2 | GET instance / STI | Spec includes `routing_level` + `node_ports` |
+| 3 | `$CLUSTER_CLI get svc … -o yaml` | `type: LoadBalancer`; `nodePort` as requested |
+| 4 | Network SP status | If labeled `no-lb-controller`: stay `PENDING` (~2 min). If MetalLB/cloud: poll until `READY`. Do **not** accept either on every cluster. |
+| 5 | Cleanup | Service + CP resources deleted |
 
 #### E2E-11: `routing_level: application` returns error `lab-default`, `crud`, `contract`
 
@@ -294,9 +316,9 @@ No `routing_level`; `provider_hints.kubernetes.node_ports` maps port name → No
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Provision with `routing_level: "network"`, no `node_ports` | Instance created |
+| 1 | Provision with `routing_level: "network"`, no `node_ports` | HTTP 201; CP may reach `RUNNING` |
 | 2 | `$CLUSTER_CLI get svc` | `TYPE=LoadBalancer`, no external IP |
-| 3 | Poll status ~2 min | Still `PENDING` (**pass** on this cluster class) |
+| 3 | Poll **network SP** status ~2 min | Still `PENDING` (**pass** only on `no-lb-controller`) |
 
 ### Phase 4 — Full DCM flow (P1)
 
@@ -308,8 +330,8 @@ No `routing_level`; `provider_hints.kubernetes.node_ports` maps port name → No
 | 2 | `POST /api/v1alpha1/catalog-items` with `service_type: network` | HTTP 201 |
 | 3 | `POST /api/v1alpha1/policies` — GLOBAL Rego `selected_agent` → that agent | HTTP 201 |
 | 4 | `POST /api/v1alpha1/catalog-item-instances` | HTTP 201; `uid` / `run_id` |
-| 5 | Poll STI until `RUNNING` | Instance RUNNING |
-| 6 | `GET` instance | `agent_name` matches step 1 |
+| 5 | Poll STI until CP `RUNNING` | CP status `RUNNING` |
+| 6 | `GET` instance | `agent_name` matches step 1; assert network SP status per cluster class |
 | 7 | `$CLUSTER_CLI get svc <metadata.name> -n <ns>` | Service exists with DCM labels |
 
 Example routing policy:
@@ -330,9 +352,17 @@ Reference: `core_platform_test.go` catalog / policy / instance flow.
 
 #### E2E-08: Validation error returns RFC 9457 problem body `lab-default`, `crud`, `contract`
 
+**E2E owns one contract smoke only.** Full validation matrix (bad service name,
+duplicate/invalid ports, NodePort out of 30000–32767, duplicate NodePort,
+malformed `provider_hints`, create conflict) stays in **unit** (agent/SP) —
+see [Test layer ownership](#test-layer-ownership).
+
+Concrete payload: `POST` catalog-item-instance (or create path) with body `{}`
+(missing required `service_type` / `metadata.name`).
+
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Invalid create via CP (or agent path) with empty/invalid body | HTTP 400 |
+| 1 | POST create via CP with body `{}` | HTTP 400 |
 | 2 | `Content-Type` | `application/problem+json` |
 | 3 | Body | RFC 9457 fields: `type`, `title`, `status` |
 
@@ -343,31 +373,41 @@ Do not add parallel TCs in utilities until monitoring stories close.
 
 ## Cleanup
 
-**Automated:** `AfterEach` / `AfterSuite` in `network_sp_api_test.go` — delete
-instances/resources created in the suite; optional
-`$CLUSTER_CLI delete svc -n <ns> -l dcm.project/managed-by=dcm`.
-Teardown: agent `make compose-down`, control-plane `make compose-down`.
+**Automated:** `AfterEach` / `AfterSuite` in `network_sp_api_test.go`.
+
+- Prefer a **dedicated test namespace** (e.g. `dcm-network-e2e`) or, if using
+  `default`, a **unique run label** such as
+  `dcm.project/e2e-run=<suite-uuid>` on every catalog item, policy, instance,
+  and Kubernetes Service created by the suite.
+- Delete by that label (or by recorded UIDs/names) — **not** a bare
+  `managed-by=dcm` wipe of the whole namespace.
+- Verify removal of: catalog items, policies, catalog-item-instances, and
+  Kubernetes Services created by the run.
+- Stack teardown: agent `make compose-down`, control-plane `make compose-down`.
 
 ## FLPATH-4865 exit criteria
 
 **Automated** — `run-e2e.sh` with `--label-filter 'sp && network'` (stack pre-deployed or harness-updated).
 
+Phase A is a **wiring gate** only (deploy / register / catalog). It does **not**
+exercise network CREATE/DELETE. **FLPATH-4865 remains incomplete until Phase B
+(E2E-04–E2E-11) passes** (or is explicitly waived with linked follow-up).
+
 | Level | Required tests | Notes |
 |-------|----------------|-------|
-| **Phase A (QE minimum)** | E2E-01–E2E-03 green | CP + agent deploy, agent registration, catalog |
-| **Phase B (QE + epic)** | E2E-01–E2E-11 green | Full inference matrix + catalog flow via embedded agent |
-| **Phase C** | E2E-08, E2E-11 green | RFC 9457 contract |
-| **Deferred** | UI (FLPATH-4762), E2E-06 on cloud LB | Skip via `no-lb-controller` |
+| **Phase A (wiring)** | E2E-01–E2E-03 green | CP + agent deploy, agent registration, catalog — **not** sufficient alone for FLPATH-4865 |
+| **Phase B (CRUD + inference)** | E2E-04–E2E-11 green | Required for FLPATH-4865 complete; includes E2E-08/11 contract smokes |
+| **Deferred** | UI (FLPATH-4762), LB READY on cloud/MetalLB | Skip LB READY via `no-lb-controller`; auth → FLPATH-3254 |
 
 ## Key configuration
 
 | Variable | Default / example | Purpose |
 |----------|-------------------|---------|
-| `AUTH_DISABLED` | `true` | Control-plane compose (no auth for lab QE) |
+| `AUTH_DISABLED` | `true` | Lab QE default; auth/tenant out of scope (see FLPATH-3254) |
 | `AGENT_EMBEDDED_SPS` | `network` (or `container,network`, …) | Enable embedded network SP |
 | `DCM_REGISTRATION_URL` | `http://host.docker.internal:8080` | Agent → CP registration base URL |
 | `AGENT_MESSAGING_URL` | `nats://host.docker.internal:4222` | Agent NATS (CP NATS on host) |
-| `SP_K8S_NAMESPACE` | `default` | Namespace for Services |
+| `SP_K8S_NAMESPACE` | `dcm-network-e2e` (prefer) or `default` | Namespace for Services; pair with unique `e2e-run` label |
 | `AGENT_KUBECONFIG_HOST` | `.kube/config` | Compose-friendly kubeconfig (`https://kubernetes:6443`) |
 | `DCM_GATEWAY_URL` | `http://localhost:8080/api/v1alpha1` | Ginkgo → control-plane |
 | `DCM_AGENT_URL` | `http://localhost:8081/api/v1alpha1` | Ginkgo → environment-agent (health/providers) |
