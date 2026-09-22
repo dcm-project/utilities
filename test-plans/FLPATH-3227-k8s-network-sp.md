@@ -419,8 +419,8 @@ exercise network CREATE/DELETE. **FLPATH-4865 remains incomplete until Phase B
 | **Test file** | `tests/e2e/network_sp_api_test.go` — `Describe("Network SP API", Label("sp", "network"), ...)` |
 | **Helpers** | Extend `sp_helpers_test.go` / agent helpers: require agent with `network`, provision via CP APIs |
 | **Control-plane** | Reuse `doRequest`, `discoverAgentByServiceType("network", ...)`, `expectRFC9457Problem` |
-| **Cluster asserts** | Reuse `initKubectl()` / `$CLUSTER_CLI` |
-| **Run** | `--skip-deploy --label-filter 'sp && network'` until harness starts agent |
+| **Cluster asserts** | Use `$CLUSTER_CLI` with the **same** namespace as agent `SP_K8S_NAMESPACE` (prefer `dcm-network-e2e`). Do **not** reuse bare `initKubectl()` — it reads `K8S_CONTAINER_SP_NAMESPACE` / `default` and will miss network Services. Pass ns explicitly or extend helpers for network. |
+| **Run** | After [FLPATH-4914](https://redhat.atlassian.net/browse/FLPATH-4914): `--skip-deploy --label-filter 'sp && network'` (stack pre-deployed until harness starts agent) |
 | **Rollout** | Phase A (E2E-01–03) first; Phase B when embedded CRUD path is stable |
 | **Legacy** | Do not rely on `--k8s-network-service-provider` / Quay `k8s-network-service-provider` |
 

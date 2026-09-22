@@ -167,7 +167,9 @@ The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained
 # Service provider tests
 ./tests/run-e2e.sh --k8s-container-service-provider --cluster-api https://api.example.com:6443
 ./tests/run-e2e.sh --k8s-storage-service-provider --kubeconfig ~/.kube/config
-./tests/run-e2e.sh --skip-deploy --label-filter "sp && network"   # CP + agent with embedded network already up
+# Network (embedded agent): planned — see FLPATH-4914 / test-plans/FLPATH-3227-k8s-network-sp.md
+# Do not run until tests/e2e/network_sp_api_test.go lands (empty filter can exit 0):
+# ./tests/run-e2e.sh --skip-deploy --label-filter "sp && network"
 ./tests/run-e2e.sh --skip-deploy --label-filter "sp && container"
 
 # ACM cluster SP tests
