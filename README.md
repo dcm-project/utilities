@@ -82,9 +82,22 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 # 9. Deploy with authentication enabled (Keycloak + JWT validation)
 ./scripts/deploy-dcm.sh --auth-enabled
 
-# 10. Tear down when done
+# 10. Deploy with the GitOps reconciliation container
+./scripts/deploy-dcm.sh --gitops
+
+# 11. Tear down an authenticated stack when done
 ./scripts/deploy-dcm.sh --auth-enabled --tear-down
+
+# Use --gitops during teardown when the reconciler was enabled
+./scripts/deploy-dcm.sh --gitops --tear-down
 ```
+
+> **Network SP:** Use [environment-agent](https://github.com/dcm-project/environment-agent)
+> with `AGENT_EMBEDDED_SPS=network` (see agent `deploy/DEPLOY.md`). The utilities
+> `--k8s-network-service-provider` flag is **legacy** (standalone Quay image path;
+> [FLPATH-4881](https://redhat.atlassian.net/browse/FLPATH-4881) obsolete).
+> QE plan: [test-plans/FLPATH-3227-k8s-network-sp.md](test-plans/FLPATH-3227-k8s-network-sp.md).
+
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
@@ -97,6 +110,10 @@ mode for a compatible environment, set the override explicitly:
 ```bash
 PODMAN_COMPOSE_IN_POD=true ./scripts/deploy-dcm.sh
 ```
+The optional `--gitops` flag adds the published `quay.io/dcm-project/dcm-gitops` container
+to the Compose stack. The reconciler shares the control-plane PostgreSQL database and
+stores cloned repositories in a named `gitops_data` volume. Set `DCM_GITOPS_VERSION` to
+pin its image independently, or use `--version` to pin all DCM images together.
 
 ## Local dev scripts
 
@@ -152,6 +169,7 @@ make help
 | `DCM_GATEWAY_URL` | `http://localhost:8080/api/v1alpha1` | Control plane API base URL |
 | `DCM_CONTAINER_SP_URL` | `http://localhost:8082/api/v1alpha1` | Container SP direct URL (requires published port) |
 | `DCM_STORAGE_SP_URL` | `http://localhost:8089/api/v1alpha1` | Storage SP direct URL (requires published port) |
+| `DCM_AGENT_URL` | `http://localhost:8081/api/v1alpha1` | Environment-agent API (embedded network via `AGENT_EMBEDDED_SPS=network`) |
 | `DCM_ACM_CLUSTER_SP_URL` | `http://localhost:8083/api/v1alpha1` | ACM Cluster SP direct URL (requires published port) |
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS server URL for status event tests |
 | `DCM_CLI_PATH` | (auto-resolved) | Path to `dcm` CLI binary |
@@ -173,6 +191,9 @@ The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained
 # Service provider tests
 ./tests/run-e2e.sh --k8s-container-service-provider --cluster-api https://api.example.com:6443
 ./tests/run-e2e.sh --k8s-storage-service-provider --kubeconfig ~/.kube/config
+# Network (embedded agent): planned — see FLPATH-4914 / test-plans/FLPATH-3227-k8s-network-sp.md
+# Do not run until tests/e2e/network_sp_api_test.go lands (empty filter can exit 0):
+# ./tests/run-e2e.sh --skip-deploy --label-filter "sp && network"
 ./tests/run-e2e.sh --skip-deploy --label-filter "sp && container"
 
 # ACM cluster SP tests

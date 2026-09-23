@@ -53,6 +53,7 @@ When a non-main version is specified, `--control-plane-branch` is auto-derived t
 **Control-plane authentication:** Pass `--auth-enabled` (or set `AUTH_DISABLED=false`) to start Keycloak and enable JWT validation. Use the same flag on `--tear-down` when tearing down an auth-enabled stack. The E2E suite currently supports unauthenticated test runs only.
 
 **Podman Compose networking:** The script uses `--in-pod false` by default so services run on the Compose bridge network and resolve service names through its DNS. Set `PODMAN_COMPOSE_IN_POD=true` only when pod-mode networking is required by the environment.
+**GitOps reconciliation:** Pass `--gitops` to add the separate published `dcm-gitops` reconciler container. It uses the same PostgreSQL database as control-plane and persists cloned repositories in the Compose `gitops_data` volume. Set `DCM_GITOPS_VERSION` to pin only that image, or use `--version` to pin all DCM images.
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
@@ -93,9 +94,11 @@ Service providers are defined declaratively in `providers/*.conf` files. Each co
 
 **To add a new provider:** drop a `.conf` file in `providers/` and (if needed) add a validation hook function in `deploy-dcm.sh`. No other changes to the deploy script are required — flags, usage, arg parsing, and env exports are all generated from the registry.
 
-Current providers: `kubevirt`, `k8s-container`, `k8s-storage`, `acm-cluster`, `three-tier-app-demo`, `three-tier-app-demo-2`, `three-tier-app-demo-3`.
+Current providers: `kubevirt`, `k8s-container`, `k8s-storage`, `k8s-network`, `acm-cluster`, `three-tier-app-demo`, `three-tier-app-demo-2`, `three-tier-app-demo-3`.
 
-Host ports published for direct SP access (compose overrides): KubeVirt **8081**, k8s-container **8082**, ACM cluster **8083**, three-tier **8084**–**8086**, k8s-container-2/3 **8087**–**8088**, k8s-storage **8089**.
+Host ports published for direct SP access (compose overrides): KubeVirt **8081**, k8s-container **8082**, ACM cluster **8083**, three-tier **8084**–**8086**, k8s-container-2/3 **8087**–**8088**, k8s-storage **8089**. Environment-agent (embedded SPs) typically publishes **8081** when used as a sibling compose stack.
+
+**k8s-network:** Embedded in [environment-agent](https://github.com/dcm-project/environment-agent) (`AGENT_EMBEDDED_SPS=network`). Do not rely on the legacy utilities `--k8s-network-service-provider` / Quay standalone image path ([FLPATH-4881](https://redhat.atlassian.net/browse/FLPATH-4881) obsolete). See `test-plans/FLPATH-3227-k8s-network-sp.md`.
 
 ### Script Structure
 
