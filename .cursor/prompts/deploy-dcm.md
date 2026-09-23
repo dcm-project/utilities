@@ -8,6 +8,7 @@ Deploy the full DCM stack for E2E testing using `scripts/deploy-dcm.sh`.
 2. **For KubeVirt provider**: `oc` (OCP cluster with CNV installed)
 3. **For k8s container provider**: `oc` or `kubectl` (any Kubernetes cluster)
 4. **For k8s storage provider**: `oc` or `kubectl` (any Kubernetes cluster)
+5. **For k8s network provider**: `oc` or `kubectl` (any Kubernetes cluster)
 
 ## Commands
 
@@ -76,6 +77,19 @@ AUTH_DISABLED=false AUTH_ISSUER_URL=http://keycloak:8080/realms/dcm AUTH_JWT_AUD
 ./scripts/deploy-dcm.sh --k8s-storage-service-provider --kubeconfig ~/.kube/config
 ```
 
+### Deploy with k8s Network Service Provider (legacy)
+
+> **Prefer embedded agent:** Network SP lives in
+> [environment-agent](https://github.com/dcm-project/environment-agent)
+> (`AGENT_EMBEDDED_SPS=network`). See agent `deploy/DEPLOY.md` and
+> `test-plans/FLPATH-3227-k8s-network-sp.md`. Auth stays off with control-plane
+> default `AUTH_DISABLED=true`.
+
+```bash
+# LEGACY — standalone Quay image path (often unavailable; FLPATH-4881 obsolete)
+./scripts/deploy-dcm.sh --k8s-network-service-provider --kubeconfig ~/.kube/config
+```
+
 ### Deploy with KubeVirt Service Provider
 ```bash
 ./scripts/deploy-dcm.sh --kubevirt-service-provider --kubeconfig ~/.kube/config
@@ -117,6 +131,8 @@ When any service provider is enabled, the script resolves cluster access in this
 | `KUBEVIRT_VM_NAMESPACE` | `--kubevirt-vm-namespace` |
 | `K8S_CONTAINER_SP_NAMESPACE` | `--k8s-container-namespace` |
 | `K8S_STORAGE_SP_NAMESPACE` | `--k8s-storage-namespace` |
+| `K8S_NETWORK_SP_NAMESPACE` | `--k8s-network-namespace` (legacy standalone network SP) |
+| `K8S_NETWORK_SERVICE_PROVIDER_VERSION` | (legacy image tag for network SP compose override) |
 | `OPENSHIFT_API` | `--cluster-api` |
 | `OPENSHIFT_USERNAME` | `--cluster-username` |
 | `OPENSHIFT_PASSWORD` | `--cluster-password` |
