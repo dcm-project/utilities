@@ -101,6 +101,15 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
+### Podman Compose networking
+
+`deploy-dcm.sh` disables Podman Compose pod mode by default so services use the
+Compose bridge network and can resolve each other by service name. To opt into pod
+mode for a compatible environment, set the override explicitly:
+
+```bash
+PODMAN_COMPOSE_IN_POD=true ./scripts/deploy-dcm.sh
+```
 The optional `--gitops` flag adds the published `quay.io/dcm-project/dcm-gitops` container
 to the Compose stack. The reconciler shares the control-plane PostgreSQL database and
 stores cloned repositories in a named `gitops_data` volume. Set `DCM_GITOPS_VERSION` to
