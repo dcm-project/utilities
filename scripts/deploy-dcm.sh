@@ -43,6 +43,8 @@ readonly VERSION_ENV_VARS=(
     K8S_NETWORK_SERVICE_PROVIDER_VERSION
     ACM_CLUSTER_SERVICE_PROVIDER_VERSION
     THREE_TIER_DEMO_SERVICE_PROVIDER_VERSION
+    ENVIRONMENT_AGENT_VERSION
+    OSAC_SERVICE_PROVIDER_VERSION
 )
 readonly DEFAULT_AGENT_PORT="8081"  # same host port as standalone kubevirt SP (compose-kubevirt-sp.yaml); agent + kubevirt requires a distinct --agent-port
 readonly AGENT_HEALTH_ENDPOINTS=(
@@ -106,8 +108,10 @@ load_providers() {
 
         # Initialize mutable state
         PROV_ENABLED[i]=false
-        # Resolve default namespace from env var or default value
-        local ns_env_val="${!NAMESPACE_ENV:-}"
+        # Resolve default namespace from env var or default value.
+        # Guard the indirect expansion: ${!name} is invalid when name is empty.
+        local ns_env_val=""
+        [[ -n "${NAMESPACE_ENV}" ]] && ns_env_val="${!NAMESPACE_ENV:-}"
         PROV_NAMESPACES[i]="${ns_env_val:-${NAMESPACE_DEFAULT}}"
         PROV_CLIS[i]=""
 
@@ -153,8 +157,9 @@ EOF
   --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted; mounted into the agent)
 EOF
 
-    # Namespace flags (generated from registry)
+    # Namespace flags (generated from registry — only for providers that define one)
     for i in $(seq 0 $((PROV_COUNT - 1))); do
+        [[ -z "${PROV_NS_FLAGS[$i]}" ]] && continue
         printf "  --%-30s Namespace for %s (default: %s)\n" \
             "${PROV_NS_FLAGS[$i]} NS" "${PROV_LABELS[$i]}" "${PROV_NS_DEFAULTS[$i]}"
     done
@@ -190,8 +195,9 @@ Environment variables (flags take precedence):
   PODMAN_COMPOSE_IN_POD     Podman Compose pod mode (default: false)
 EOF
 
-    # Provider namespace env vars (generated from registry)
+    # Provider namespace env vars (generated from registry — only for providers that define one)
     for i in $(seq 0 $((PROV_COUNT - 1))); do
+        [[ -z "${PROV_NS_ENVS[$i]}" ]] && continue
         printf "  %-25s Same as --%s (default: %s)\n" \
             "${PROV_NS_ENVS[$i]}" "${PROV_NS_FLAGS[$i]}" "${PROV_NS_DEFAULTS[$i]}"
     done
@@ -434,6 +440,43 @@ agent_embeds() {
         [[ "${tok}" == "${want}" ]] && return 0
     done
     return 1
+}
+
+validate_osac_provider() {
+    # OSAC SP needs no cluster access — validate credentials and env-agent dependency only.
+    log "Validating OSAC service provider prerequisites"
+
+    local missing=()
+    for var in SP_OSAC_FULFILLMENT_ADDRESS SP_OSAC_OIDC_ISSUER_URL \
+                SP_OSAC_OIDC_CLIENT_ID SP_OSAC_OIDC_CLIENT_SECRET; do
+        [[ -z "${!var:-}" ]] && missing+=("${var}")
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        err "OSAC SP requires the following credentials (not set):"
+        for var in "${missing[@]}"; do
+            err "  ${var}"
+        done
+        err "Add them to deploy/.env or export them in the shell before deploying."
+        return 1
+    fi
+    info "OSAC credentials present"
+
+    # OSAC SP registers with environment-agent — ensure it is also enabled.
+    local ea_enabled=false
+    local j
+    for j in $(seq 0 $((PROV_COUNT - 1))); do
+        if [[ "${PROV_FLAGS[$j]}" == "environment-agent" ]] && \
+           [[ "${PROV_ENABLED[$j]}" == true ]]; then
+            ea_enabled=true
+            break
+        fi
+    done
+    if [[ "${ea_enabled}" == false ]]; then
+        err "OSAC SP registers with the environment-agent, but --environment-agent is not enabled."
+        err "Add --environment-agent to your deploy command."
+        return 1
+    fi
 }
 
 # --- Cluster authentication ------------------------------------------------ #

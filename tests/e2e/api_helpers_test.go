@@ -53,6 +53,7 @@ var _ = BeforeSuite(func() {
 	initContainerSP()
 	initAcmClusterSP()
 	initNetworkSP()
+	initOsacSP()
 
 	// Resolve cluster CLI for tests that need kubectl/oc.
 	initKubectl()
