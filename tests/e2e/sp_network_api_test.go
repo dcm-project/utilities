@@ -69,7 +69,13 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 	Context("Phase B CRUD", Label("crud", "cluster"), func() {
 		Context("ClusterIP inference", Label("clusterip"), Ordered, func() {
 			var resource networkCRUDResource
-			AfterAll(func() { cleanupNetworkResource(resource) })
+			var deleted bool
+			BeforeAll(func() { requireKubectl() })
+			AfterAll(func() {
+				if !deleted {
+					cleanupNetworkResource(resource)
+				}
+			})
 			It("E2E-04 creates and reads a ClusterIP network", func() {
 				agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
 				resource = createNetworkResource(agentName, networkSpecOptions{
@@ -81,13 +87,19 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 			})
 			It("E2E-05 deletes the ClusterIP network and its Kubernetes Service", func() {
 				deleteNetworkResource(resource)
-				resource = networkCRUDResource{}
+				deleted = true
 			})
 		})
 
 		Context("NodePort inference", Label("nodeport"), Ordered, func() {
 			var resource networkCRUDResource
-			AfterAll(func() { cleanupNetworkResource(resource) })
+			var deleted bool
+			BeforeAll(func() { requireKubectl() })
+			AfterAll(func() {
+				if !deleted {
+					cleanupNetworkResource(resource)
+				}
+			})
 			It("E2E-09 creates and reads a NodePort network", func() {
 				agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
 				resource = createNetworkResource(agentName, networkSpecOptions{
@@ -99,25 +111,25 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 			})
 			It("deletes the NodePort network and its Kubernetes Service", func() {
 				deleteNetworkResource(resource)
-				resource = networkCRUDResource{}
+				deleted = true
 			})
 		})
 
 		It("E2E-06 creates a LoadBalancer network without node ports", Label("no-lb-controller"), func() {
-			skipIfMetalLBIsReady()
+			requireLoadBalancerMode("none")
 			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
 			resource := createNetworkResource(agentName, networkSpecOptions{
 				namePrefix: "e2e-network-loadbalancer", routingLevel: "network", selectorKey: "app", selectorVal: "e2e-network",
 			})
 			defer cleanupNetworkResource(resource)
-			waitForNetworkPending(resource.ResourceID)
+			waitForNetworkPending(resource.ResourceID, resource.ServiceName, 2*time.Minute)
 			assertNetworkService(resource, "LoadBalancer", "", false, "")
 			assertNetworkServiceHasNoExternalIP(resource)
 			assertNetworkInstance(resource, agentName, "pending")
 		})
 
-		It("E2E-12 creates a MetalLB-backed LoadBalancer network", Label("requires-metallb"), func() {
-			requireMetalLB()
+		It("E2E-12 creates a controller-backed LoadBalancer network", Label("requires-lb-controller"), func() {
+			requireLoadBalancerController()
 			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
 			resource := createNetworkResource(agentName, networkSpecOptions{
 				namePrefix: "e2e-network-metallb", routingLevel: "network", selectorKey: "app", selectorVal: "e2e-network",
@@ -135,14 +147,13 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 				namePrefix: "e2e-network-loadbalancer-np", routingLevel: "network", nodePort: 30081, selectorKey: "app", selectorVal: "e2e-network",
 			})
 			defer cleanupNetworkResource(resource)
-			metalLBReady := metalLBIsReady()
-			if metalLBReady {
+			if loadBalancerMode() != "none" {
 				waitForNetworkReady(resource.ResourceID)
 			} else {
-				waitForNetworkPending(resource.ResourceID)
+				waitForNetworkPending(resource.ResourceID, resource.ServiceName, 2*time.Minute)
 			}
 			assertNetworkService(resource, "LoadBalancer", "", false, "http")
-			if metalLBReady {
+			if loadBalancerMode() != "none" {
 				assertNetworkServiceHasExternalIP(resource)
 				assertNetworkInstance(resource, agentName, "ready")
 			} else {
@@ -174,6 +185,7 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 		It("E2E-08 rejects an incomplete catalog-item instance request", Label("contract"), func() {
 			resp, err := doRequest(http.MethodPost, "/catalog-item-instances", "{}")
 			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
 			expectRFC9457Problem(resp, problemDetailExpectation{
 				Status: http.StatusBadRequest,
 			})
@@ -200,9 +212,6 @@ func createNetworkResource(agentName string, opts networkSpecOptions) networkCRU
 	resource.PolicyID = createNetworkPolicy(agentName)
 	resource.CatalogItemID = createNetworkCatalogItem(resource.ServiceName, opts)
 	resource.InstanceID, resource.ResourceID = createNetworkInstance(resource, opts)
-	// The embedded provider uses the control-plane resource ID as the
-	// Kubernetes Service name, even when metadata.name was supplied.
-	resource.ServiceName = resource.ResourceID
 	return resource
 }
 
@@ -333,36 +342,54 @@ func waitForNetworkReady(resourceID string) {
 	waitForNetworkStatus(resourceID, "ready")
 }
 
-func waitForNetworkPending(resourceID string) {
+func waitForNetworkPending(resourceID, serviceName string, duration time.Duration) {
 	GinkgoHelper()
-	waitForNetworkStatus(resourceID, "pending")
+	Consistently(func() string {
+		status := networkResourceStatus(resourceID)
+		if status != "pending" {
+			return status
+		}
+		service, err := networkService(networkTestNamespace(), serviceName)
+		if err != nil {
+			return "service-unavailable"
+		}
+		if hasExternalAddress(service) {
+			return "external-address"
+		}
+		return status
+	}).WithTimeout(duration).WithPolling(3 * time.Second).Should(Equal("pending"))
 }
 
 func waitForNetworkStatus(resourceID, expected string) {
 	GinkgoHelper()
 	Eventually(func() interface{} {
-		resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
-		if err != nil || resp == nil {
-			return "unavailable"
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return "unavailable"
-		}
-		var body map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return "invalid-response"
-		}
-		status, _ := body["status"].(string)
-		statusMessage, _ := body["status_message"].(string)
+		status := networkResourceStatus(resourceID)
 		if status == "failed" && expected != "failed" {
-			return StopTrying(fmt.Sprintf("network resource %s failed: %s", resourceID, statusMessage))
+			return StopTrying(fmt.Sprintf("network resource %s failed", resourceID))
 		}
 		if status == "running" && expected == "failed" {
 			return StopTrying(fmt.Sprintf("unsupported network routing unexpectedly reached RUNNING: %s", resourceID))
 		}
 		return status
 	}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal(expected))
+}
+
+func networkResourceStatus(resourceID string) string {
+	GinkgoHelper()
+	resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
+	if err != nil || resp == nil {
+		return "unavailable"
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "unavailable"
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "invalid-response"
+	}
+	status, _ := body["status"].(string)
+	return status
 }
 
 func waitForNetworkFailed(resourceID string) {
@@ -374,6 +401,7 @@ func assertNetworkInstance(resource networkCRUDResource, agentName, expectedStat
 	GinkgoHelper()
 	resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resource.ResourceID, "")
 	Expect(err).NotTo(HaveOccurred())
+	defer resp.Body.Close()
 	Expect(resp.StatusCode).To(Equal(http.StatusOK))
 	var body map[string]interface{}
 	decodeJSON(resp, &body)
@@ -441,70 +469,95 @@ func assertNetworkServiceAbsent(resource networkCRUDResource) {
 
 func assertNetworkServiceHasNoExternalIP(resource networkCRUDResource) {
 	GinkgoHelper()
-	out, err := runKubectlInNamespace(resource.Namespace, "get", "service", resource.ServiceName, "-o", "json")
-	Expect(err).NotTo(HaveOccurred(), "kubectl output: %s", out)
-	var service map[string]interface{}
-	Expect(json.Unmarshal([]byte(out), &service)).To(Succeed())
-	status, ok := service["status"].(map[string]interface{})
-	Expect(ok).To(BeTrue())
-	ingress, ok := status["loadBalancer"].(map[string]interface{})
-	if !ok {
-		return
-	}
-	if values, ok := ingress["ingress"].([]interface{}); ok {
-		Expect(values).To(BeEmpty(), "LoadBalancer Service must not have an external address on the laptop stack")
-	}
+	service, err := networkService(resource.Namespace, resource.ServiceName)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(hasExternalAddress(service)).To(BeFalse(),
+		"LoadBalancer Service must not have an external address")
 }
 
 func assertNetworkServiceHasExternalIP(resource networkCRUDResource) {
 	GinkgoHelper()
-	requireKubectl()
-	out, err := runKubectlInNamespace(resource.Namespace, "get", "service", resource.ServiceName, "-o", "json")
-	Expect(err).NotTo(HaveOccurred(), "kubectl output: %s", out)
-	var service map[string]interface{}
-	Expect(json.Unmarshal([]byte(out), &service)).To(Succeed())
-	status, ok := service["status"].(map[string]interface{})
-	Expect(ok).To(BeTrue())
-	loadBalancer, ok := status["loadBalancer"].(map[string]interface{})
-	Expect(ok).To(BeTrue())
-	ingress, ok := loadBalancer["ingress"].([]interface{})
-	Expect(ok).To(BeTrue())
-	Expect(ingress).NotTo(BeEmpty(), "MetalLB LoadBalancer Service must have an external address")
-	entry, ok := ingress[0].(map[string]interface{})
-	Expect(ok).To(BeTrue())
-	Expect(entry["ip"] != "" || entry["hostname"] != "").To(BeTrue(),
-		"external address must contain an IP or hostname")
+	service, err := networkService(resource.Namespace, resource.ServiceName)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(hasExternalAddress(service)).To(BeTrue(),
+		"LoadBalancer Service must have an external address")
 }
 
-func requireMetalLB() {
-	GinkgoHelper()
-	if !metalLBIsReady() {
-		Skip("MetalLB controller is not ready")
-	}
-}
-
-func skipIfMetalLBIsReady() {
-	GinkgoHelper()
-	if metalLBIsReady() {
-		Skip("MetalLB is installed; this case requires a cluster without a load-balancer controller")
-	}
-}
-
-func metalLBIsReady() bool {
-	out, err := runKubectlInNamespace("metallb-system", "get", "deployment", "controller", "-o", "json")
+func networkService(namespace, serviceName string) (map[string]interface{}, error) {
+	out, err := runKubectlInNamespace(namespace, "get", "service", serviceName, "-o", "json")
 	if err != nil {
-		return false
+		return nil, fmt.Errorf("reading Service %s: %w; output: %s", serviceName, err, out)
 	}
-	var deployment map[string]interface{}
-	if json.Unmarshal([]byte(out), &deployment) != nil {
-		return false
+	var service map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &service); err != nil {
+		return nil, fmt.Errorf("decoding Service %s: %w", serviceName, err)
 	}
-	status, ok := deployment["status"].(map[string]interface{})
+	return service, nil
+}
+
+func hasExternalAddress(service map[string]interface{}) bool {
+	status, ok := service["status"].(map[string]interface{})
 	if !ok {
 		return false
 	}
+	loadBalancer, ok := status["loadBalancer"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	ingress, ok := loadBalancer["ingress"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, raw := range ingress {
+		entry, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		ip, _ := entry["ip"].(string)
+		hostname, _ := entry["hostname"].(string)
+		if ip != "" || hostname != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func requireLoadBalancerController() {
+	GinkgoHelper()
+	mode := loadBalancerMode()
+	if mode != "metallb" && mode != "cloud" {
+		Skip("a load-balancer controller is not configured")
+	}
+}
+
+func requireLoadBalancerMode(expected string) {
+	GinkgoHelper()
+	if loadBalancerMode() != expected {
+		Skip(fmt.Sprintf("load-balancer mode %q is required", expected))
+	}
+}
+
+func loadBalancerMode() string {
+	if mode := os.Getenv("DCM_NETWORK_LB_MODE"); mode != "" {
+		return mode
+	}
+	out, err := runKubectlInNamespace("metallb-system", "get", "deployment", "controller", "-o", "json")
+	if err != nil {
+		return "none"
+	}
+	var deployment map[string]interface{}
+	if json.Unmarshal([]byte(out), &deployment) != nil {
+		return "none"
+	}
+	status, ok := deployment["status"].(map[string]interface{})
+	if !ok {
+		return "none"
+	}
 	available, _ := status["availableReplicas"].(float64)
-	return available > 0
+	if available > 0 {
+		return "metallb"
+	}
+	return "none"
 }
 
 func deleteNetworkResource(resource networkCRUDResource) {
@@ -517,68 +570,77 @@ func deleteNetworkResource(resource networkCRUDResource) {
 	Expect(resp.StatusCode).To(BeNumerically(">=", http.StatusOK))
 	Expect(resp.StatusCode).To(BeNumerically("<", http.StatusMultipleChoices))
 	resp.Body.Close()
-	Eventually(func() int {
-		resp, err := doRequest(http.MethodGet, "/catalog-item-instances/"+resource.InstanceID, "")
-		if err != nil || resp == nil {
-			return 0
-		}
-		defer resp.Body.Close()
-		return resp.StatusCode
-	}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Equal(http.StatusNotFound))
-	Eventually(func() string {
-		resp, err := doRequest(http.MethodGet, "/service-type-instances/"+resource.ResourceID, "")
-		if err != nil || resp == nil {
-			return ""
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusNotFound {
-			return ""
-		}
-		return fmt.Sprintf("status-%d", resp.StatusCode)
-	}).WithTimeout(60*time.Second).WithPolling(3*time.Second).Should(BeEmpty(),
-		"service-type-instance %s should be removed", resource.ResourceID)
-	Eventually(func() string {
-		out, _ := runKubectlInNamespace(resource.Namespace, "get", "service", resource.ServiceName,
-			"-o", "name", "--ignore-not-found")
-		return strings.TrimSpace(out)
-	}).WithTimeout(60*time.Second).WithPolling(3*time.Second).Should(BeEmpty(),
-		"Kubernetes Service %s should be removed", resource.ServiceName)
+	waitForNotFound("/catalog-item-instances/"+resource.InstanceID,
+		"catalog-item-instance "+resource.InstanceID)
+	waitForNotFound("/service-type-instances/"+resource.ResourceID,
+		"service-type-instance "+resource.ResourceID)
+	waitForServiceAbsent(resource)
 	if resource.CatalogItemID != "" {
-		resp, err := doRequest(http.MethodDelete, "/catalog-items/"+resource.CatalogItemID, "")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(BeNumerically(">=", http.StatusOK))
-		Expect(resp.StatusCode).To(BeNumerically("<", http.StatusMultipleChoices))
-		resp.Body.Close()
+		deleteNetworkObject("/catalog-items/"+resource.CatalogItemID, "catalog item")
 	}
 	if resource.PolicyID != "" {
-		resp, err := doRequest(http.MethodDelete, "/policies/"+resource.PolicyID, "")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(BeNumerically(">=", http.StatusOK))
-		Expect(resp.StatusCode).To(BeNumerically("<", http.StatusMultipleChoices))
-		resp.Body.Close()
+		deleteNetworkObject("/policies/"+resource.PolicyID, "policy")
 	}
 }
 
 func cleanupNetworkResource(resource networkCRUDResource) {
 	GinkgoHelper()
 	if resource.InstanceID != "" {
-		resp, err := doRequest(http.MethodDelete, "/catalog-item-instances/"+resource.InstanceID, "")
-		if err == nil && resp != nil {
-			resp.Body.Close()
-		}
+		deleteNetworkResource(resource)
+		return
 	}
 	if resource.CatalogItemID != "" {
-		resp, err := doRequest(http.MethodDelete, "/catalog-items/"+resource.CatalogItemID, "")
-		if err == nil && resp != nil {
-			resp.Body.Close()
-		}
+		deleteNetworkObject("/catalog-items/"+resource.CatalogItemID, "catalog item")
 	}
 	if resource.PolicyID != "" {
-		resp, err := doRequest(http.MethodDelete, "/policies/"+resource.PolicyID, "")
-		if err == nil && resp != nil {
-			resp.Body.Close()
-		}
+		deleteNetworkObject("/policies/"+resource.PolicyID, "policy")
 	}
+}
+
+func waitForNotFound(path, description string) {
+	GinkgoHelper()
+	Eventually(func() error {
+		resp, err := doRequest(http.MethodGet, path, "")
+		if err != nil {
+			return err
+		}
+		if resp == nil {
+			return fmt.Errorf("%s lookup returned no response", description)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			return fmt.Errorf("%s returned HTTP %d", description, resp.StatusCode)
+		}
+		return nil
+	}).WithTimeout(60*time.Second).WithPolling(3*time.Second).Should(Succeed(),
+		"%s should be removed", description)
+}
+
+func waitForServiceAbsent(resource networkCRUDResource) {
+	GinkgoHelper()
+	Eventually(func() error {
+		out, err := runKubectlInNamespace(resource.Namespace, "get", "service", resource.ServiceName,
+			"-o", "name", "--ignore-not-found")
+		if err != nil {
+			return fmt.Errorf("kubectl service lookup failed: %w; output: %s", err, out)
+		}
+		if strings.TrimSpace(out) != "" {
+			return fmt.Errorf("service still exists: %s", strings.TrimSpace(out))
+		}
+		return nil
+	}).WithTimeout(60*time.Second).WithPolling(3*time.Second).Should(Succeed(),
+		"Kubernetes Service %s should be removed", resource.ServiceName)
+}
+
+func deleteNetworkObject(path, description string) {
+	GinkgoHelper()
+	resp, err := doRequest(http.MethodDelete, path, "")
+	Expect(err).NotTo(HaveOccurred(), "deleting %s", description)
+	Expect(resp).NotTo(BeNil())
+	defer resp.Body.Close()
+	Expect(resp.StatusCode == http.StatusNotFound ||
+		(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices)).To(BeTrue(),
+		"deleting %s returned HTTP %d", description, resp.StatusCode)
 }
 
 func networkTestNamespace() string {

@@ -29,13 +29,13 @@ This plan defines **automated utilities E2E** (Ginkgo) for the embedded network 
 control-plane + environment-agent deploy, agent registration, catalog, and thin
 happy-path checks against a real cluster (Kind or OCP) and DCM stack.
 
-**Execution mode:** Ginkgo tests in `tests/e2e/network_sp_api_test.go`, run via
+**Execution mode:** Ginkgo tests in `tests/e2e/sp_network_api_test.go`, run via
 `tests/run-e2e.sh` (see [Test implementation](#test-implementation)). Each E2E-*
 case below maps to one or more `It` blocks. Manual curl/kubectl steps are
 reference only for debugging — not the deliverable.
 
 > **Delivery note:** The automated suite is implemented in
-> `tests/e2e/network_sp_api_test.go`. Execution evidence is recorded in
+> `tests/e2e/sp_network_api_test.go`. Execution evidence is recorded in
 > [FLPATH-4865](https://redhat.atlassian.net/browse/FLPATH-4865).
 
 It does **not** duplicate unit/integration coverage owned by the environment-agent
@@ -82,7 +82,7 @@ another layer unless the row below says otherwise.
 | Catalog `network` service type | — | — | **Owner** — E2E-03 |
 | CatalogItem → Instance → K8s Service | — | — | **Owner** — E2E-04, E2E-09, E2E-10, E2E-12, E2E-13 |
 | LoadBalancer PENDING (no LB controller) | — | **Owner** | E2E-06 smoke (`no-lb-controller`) |
-| LoadBalancer READY (MetalLB / cloud LB) | — | **Owner** | E2E-12 (`requires-metallb` or cloud) |
+| LoadBalancer READY (MetalLB / cloud LB) | — | **Owner** | E2E-12 (`requires-lb-controller`) |
 
 ### Upstream plans (source of truth for non-E2E)
 
@@ -198,7 +198,7 @@ Ginkgo labels (mirror container SP: `Label("sp", "container")`):
 #### E2E-01: Deploy stack with embedded network `lab-default`
 
 **Ginkgo:** `BeforeSuite` / deploy precondition + `Context("health")` in
-`network_sp_api_test.go`.
+`sp_network_api_test.go`.
 
 | Step | Action | Expected |
 |------|--------|----------|
@@ -331,9 +331,10 @@ the regular ClusterIP default and the headless behavior cannot mask each other.
 | 2 | `$CLUSTER_CLI get svc` | `TYPE=LoadBalancer`, no external IP |
 | 3 | Poll **network SP** status ~2 min | Still `PENDING` (**pass** only on `no-lb-controller`) |
 
-#### E2E-12: MetalLB LoadBalancer reaches READY `requires-metallb`, `crud`, `cluster`
+#### E2E-12: Controller-backed LoadBalancer reaches READY `requires-lb-controller`, `crud`, `cluster`
 
-**Precondition:** MetalLB controller is available.
+**Precondition:** A load-balancer controller is available. MetalLB is detected
+automatically; cloud environments must set `DCM_NETWORK_LB_MODE=cloud`.
 
 | Step | Action | Expected |
 |------|--------|----------|
@@ -373,7 +374,8 @@ Do not add parallel TCs in utilities until monitoring stories close.
 
 ## Cleanup
 
-**Automated:** `AfterEach` / `AfterSuite` in `network_sp_api_test.go`.
+**Automated:** ordered-context `AfterAll` and per-test cleanup in
+`sp_network_api_test.go`.
 
 - Prefer a **dedicated test namespace** (e.g. `dcm-network-e2e`) or, if using
   `default`, a **unique run label** such as
@@ -412,12 +414,13 @@ exercise network CREATE/DELETE. **FLPATH-4865 remains incomplete until Phase B
 | `AGENT_KUBECONFIG_HOST` | `.kube/config` | Compose-friendly kubeconfig (`https://kubernetes:6443`) |
 | `DCM_GATEWAY_URL` | `http://localhost:8080/api/v1alpha1` | Ginkgo → control-plane |
 | `DCM_AGENT_URL` | `http://localhost:8081/api/v1alpha1` | Ginkgo → environment-agent (health/providers) |
+| `DCM_NETWORK_LB_MODE` | auto-detect MetalLB; `cloud` for a cloud LB | Select `none`, `metallb`, or `cloud` expectations |
 
 ## Test implementation (utilities)
 
 | Item | Path / action |
 |------|----------------|
-| **Test file** | `tests/e2e/network_sp_api_test.go` — `Describe("Network SP API", Label("sp", "network"), ...)` |
+| **Test file** | `tests/e2e/sp_network_api_test.go` — `Describe("Network SP API", Label("sp", "network"), ...)` |
 | **Helpers** | Extend `sp_helpers_test.go` / agent helpers: require agent with `network`, provision via CP APIs |
 | **Control-plane** | Reuse `doRequest`, `discoverAgentByServiceType("network", ...)`, `expectRFC9457Problem` |
 | **Cluster asserts** | Use `$CLUSTER_CLI` with the **same** namespace as agent `SP_K8S_NAMESPACE` (prefer `dcm-network-e2e`). Do **not** reuse bare `initKubectl()` — it reads `K8S_CONTAINER_SP_NAMESPACE` / `default` and will miss network Services. Pass ns explicitly or extend helpers for network. |
