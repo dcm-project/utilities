@@ -1,3 +1,5 @@
+//go:build e2e
+
 package e2e_test
 
 import (
@@ -51,6 +53,7 @@ var (
 	unauthenticatedClient *http.Client
 	authEnabled           bool
 	authTokens            *authTokenProvider
+	authGatewayOrigin     string
 )
 
 func loadAuthSettings() (authSettings, error) {
@@ -96,6 +99,11 @@ func configureHTTPClients() error {
 	if err != nil {
 		return err
 	}
+	gatewayURL, err := url.Parse(gatewayBaseURL)
+	if err != nil || gatewayURL.Scheme == "" || gatewayURL.Host == "" {
+		return fmt.Errorf("invalid DCM_GATEWAY_URL: %q", gatewayBaseURL)
+	}
+	authGatewayOrigin = gatewayURL.Scheme + "://" + gatewayURL.Host
 	unauthenticatedClient = &http.Client{Timeout: 10 * time.Second, Transport: baseTransport}
 	authEnabled = settings.enabled
 	authTokens = nil
@@ -107,7 +115,7 @@ func configureHTTPClients() error {
 		}
 		httpClient = &http.Client{
 			Timeout:   10 * time.Second,
-			Transport: &authTransport{base: baseTransport, tokens: authTokens},
+			Transport: &authTransport{base: baseTransport, tokens: authTokens, origin: authGatewayOrigin},
 		}
 	}
 	return nil
@@ -140,9 +148,14 @@ func newHTTPTransport(caFile string) (http.RoundTripper, error) {
 type authTransport struct {
 	base   http.RoundTripper
 	tokens *authTokenProvider
+	origin string
 }
 
 func (t *authTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	requestOrigin := request.URL.Scheme + "://" + request.URL.Host
+	if requestOrigin != t.origin {
+		return t.base.RoundTrip(request)
+	}
 	token, err := t.tokens.Token(request.Context())
 	if err != nil {
 		return nil, err

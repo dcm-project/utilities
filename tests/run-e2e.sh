@@ -272,6 +272,7 @@ if [[ "${AUTH_ENABLED}" == "true" ]]; then
     fi
     export DCM_AUTH_ENABLED=true
     export DCM_AUTH_ISSUER_URL="${AUTH_ISSUER_URL}"
+    export AUTH_ISSUER_URL="${AUTH_ISSUER_URL}"
     DEPLOY_ARGS+=(--auth-enabled)
     info "DCM authentication enabled for E2E requests"
 else

@@ -1,3 +1,5 @@
+//go:build e2e
+
 package e2e_test
 
 import (
@@ -76,7 +78,7 @@ func TestAuthTransportRefreshesAndInjectsBearerToken(t *testing.T) {
 		client:   server.Client(),
 	}
 	client := &http.Client{
-		Transport: &authTransport{base: server.Client().Transport, tokens: provider},
+		Transport: &authTransport{base: server.Client().Transport, tokens: provider, origin: server.URL},
 	}
 
 	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1alpha1/catalog-items", nil)

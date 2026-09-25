@@ -16,7 +16,7 @@ var _ = Describe("DCM API authentication", Label("smoke", "auth"), func() {
 		}
 		resp, err := doUnauthenticatedRequest(http.MethodGet, "/catalog-items", "")
 		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(resp.Body.Close)
+		defer resp.Body.Close()
 		Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized))
 	})
 
