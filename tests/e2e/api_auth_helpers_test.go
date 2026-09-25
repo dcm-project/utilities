@@ -154,7 +154,9 @@ type authTransport struct {
 func (t *authTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	requestOrigin := request.URL.Scheme + "://" + request.URL.Host
 	if requestOrigin != t.origin {
-		return t.base.RoundTrip(request)
+		redirectedRequest := request.Clone(request.Context())
+		redirectedRequest.Header.Del("Authorization")
+		return t.base.RoundTrip(redirectedRequest)
 	}
 	token, err := t.tokens.Token(request.Context())
 	if err != nil {

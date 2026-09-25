@@ -94,3 +94,41 @@ func TestAuthTransportRefreshesAndInjectsBearerToken(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
 	}
 }
+
+func TestAuthTransportStripsBearerTokenOnOriginChangingRedirect(t *testing.T) {
+	redirectedRequestAuthorization := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		redirectedRequestAuthorization <- request.Header.Get("Authorization")
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, target.URL, http.StatusFound)
+	}))
+	defer gateway.Close()
+
+	provider := &authTokenProvider{
+		settings: authSettings{staticToken: "test-token"},
+		client:   gateway.Client(),
+	}
+	client := &http.Client{
+		Transport: &authTransport{
+			base:   gateway.Client().Transport,
+			tokens: provider,
+			origin: gateway.URL,
+		},
+	}
+
+	response, err := client.Get(gateway.URL + "/api/v1alpha1/catalog-items")
+	if err != nil {
+		t.Fatalf("client.Get() error = %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	if got := <-redirectedRequestAuthorization; got != "" {
+		t.Fatalf("redirected Authorization = %q, want empty", got)
+	}
+}
