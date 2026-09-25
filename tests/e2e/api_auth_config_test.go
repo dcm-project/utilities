@@ -3,10 +3,12 @@
 package e2e_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestLoadAuthSettings(t *testing.T) {
@@ -130,5 +132,60 @@ func TestAuthTransportStripsBearerTokenOnOriginChangingRedirect(t *testing.T) {
 	}
 	if got := <-redirectedRequestAuthorization; got != "" {
 		t.Fatalf("redirected Authorization = %q, want empty", got)
+	}
+}
+
+func TestAuthTokenProviderCachesAndRefreshes(t *testing.T) {
+	tokenRequests := 0
+	issuer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		tokenRequests++
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(writer, `{"access_token":"token-%d","expires_in":300}`, tokenRequests)
+	}))
+	defer issuer.Close()
+
+	provider := &authTokenProvider{
+		settings: authSettings{
+			issuerURL:    issuer.URL + "/realms/test",
+			clientID:     "dcm-proxy",
+			clientSecret: "secret",
+			username:     "testuser",
+			password:     "password",
+		},
+		client: issuer.Client(),
+	}
+
+	firstToken, err := provider.Token(context.Background())
+	if err != nil {
+		t.Fatalf("first Token() error = %v", err)
+	}
+	if firstToken != "token-1" {
+		t.Fatalf("first token = %q, want token-1", firstToken)
+	}
+
+	cachedToken, err := provider.Token(context.Background())
+	if err != nil {
+		t.Fatalf("cached Token() error = %v", err)
+	}
+	if cachedToken != firstToken || tokenRequests != 1 {
+		t.Fatalf("cached token = %q with %d requests, want %q with 1 request", cachedToken, tokenRequests, firstToken)
+	}
+
+	provider.expiresAt = time.Now().Add(10 * time.Second)
+	earlyRefreshToken, err := provider.Token(context.Background())
+	if err != nil {
+		t.Fatalf("early-refresh Token() error = %v", err)
+	}
+	if earlyRefreshToken != "token-2" || tokenRequests != 2 {
+		t.Fatalf("early-refresh token = %q with %d requests, want token-2 with 2 requests", earlyRefreshToken, tokenRequests)
+	}
+
+	provider.expiresAt = time.Now().Add(-time.Second)
+	expiredRefreshToken, err := provider.Token(context.Background())
+	if err != nil {
+		t.Fatalf("expired-refresh Token() error = %v", err)
+	}
+	if expiredRefreshToken != "token-3" || tokenRequests != 3 {
+		t.Fatalf("expired-refresh token = %q with %d requests, want token-3 with 3 requests", expiredRefreshToken, tokenRequests)
 	}
 }
