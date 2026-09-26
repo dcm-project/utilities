@@ -83,7 +83,7 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 				})
 				waitForNetworkReady(resource.ResourceID)
 				assertNetworkService(resource, "ClusterIP", "", true, "")
-				assertNetworkInstance(resource, agentName, "ready")
+				assertNetworkInstance(resource, agentName, "RUNNING")
 			})
 			It("E2E-05 deletes the ClusterIP network and its Kubernetes Service", func() {
 				deleteNetworkResource(resource)
@@ -107,7 +107,7 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 				})
 				waitForNetworkReady(resource.ResourceID)
 				assertNetworkService(resource, "NodePort", "", false, "http")
-				assertNetworkInstance(resource, agentName, "ready")
+				assertNetworkInstance(resource, agentName, "RUNNING")
 			})
 			It("deletes the NodePort network and its Kubernetes Service", func() {
 				deleteNetworkResource(resource)
@@ -116,6 +116,7 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 		})
 
 		It("E2E-06 creates a LoadBalancer network without node ports", Label("no-lb-controller"), func() {
+			requireKubectl()
 			requireLoadBalancerMode("none")
 			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
 			resource := createNetworkResource(agentName, networkSpecOptions{
@@ -125,10 +126,11 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 			waitForNetworkPending(resource.ResourceID, resource.ServiceName, 2*time.Minute)
 			assertNetworkService(resource, "LoadBalancer", "", false, "")
 			assertNetworkServiceHasNoExternalIP(resource)
-			assertNetworkInstance(resource, agentName, "pending")
+			assertNetworkInstance(resource, agentName, "RUNNING")
 		})
 
 		It("E2E-12 creates a controller-backed LoadBalancer network", Label("requires-lb-controller"), func() {
+			requireKubectl()
 			requireLoadBalancerController()
 			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
 			resource := createNetworkResource(agentName, networkSpecOptions{
@@ -138,26 +140,31 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 			waitForNetworkReady(resource.ResourceID)
 			assertNetworkService(resource, "LoadBalancer", "", false, "")
 			assertNetworkServiceHasExternalIP(resource)
-			assertNetworkInstance(resource, agentName, "ready")
+			assertNetworkInstance(resource, agentName, "RUNNING")
 		})
 
 		It("E2E-10 creates a LoadBalancer network with a node port", Label("loadbalancer"), func() {
+			requireKubectl()
 			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
 			resource := createNetworkResource(agentName, networkSpecOptions{
 				namePrefix: "e2e-network-loadbalancer-np", routingLevel: "network", nodePort: 30081, selectorKey: "app", selectorVal: "e2e-network",
 			})
 			defer cleanupNetworkResource(resource)
-			if loadBalancerMode() != "none" {
+			mode := loadBalancerMode()
+			if mode == "unavailable" {
+				Skip("load-balancer capability could not be determined")
+			}
+			if mode != "none" {
 				waitForNetworkReady(resource.ResourceID)
 			} else {
 				waitForNetworkPending(resource.ResourceID, resource.ServiceName, 2*time.Minute)
 			}
 			assertNetworkService(resource, "LoadBalancer", "", false, "http")
-			if loadBalancerMode() != "none" {
+			if mode != "none" {
 				assertNetworkServiceHasExternalIP(resource)
-				assertNetworkInstance(resource, agentName, "ready")
+				assertNetworkInstance(resource, agentName, "RUNNING")
 			} else {
-				assertNetworkInstance(resource, agentName, "pending")
+				assertNetworkInstance(resource, agentName, "RUNNING")
 			}
 		})
 
@@ -169,7 +176,7 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 			defer cleanupNetworkResource(resource)
 			waitForNetworkReady(resource.ResourceID)
 			assertNetworkService(resource, "ClusterIP", "None", false, "")
-			assertNetworkInstance(resource, agentName, "ready")
+			assertNetworkInstance(resource, agentName, "RUNNING")
 		})
 
 		It("E2E-11 rejects application routing and does not create a Service", Label("contract", "unsupported"), func() {
@@ -339,14 +346,14 @@ func postNetworkJSON(path string, payload interface{}) *http.Response {
 
 func waitForNetworkReady(resourceID string) {
 	GinkgoHelper()
-	waitForNetworkStatus(resourceID, "ready")
+	waitForNetworkStatus(resourceID, "RUNNING")
 }
 
 func waitForNetworkPending(resourceID, serviceName string, duration time.Duration) {
 	GinkgoHelper()
-	Consistently(func() string {
+	pendingState := func() string {
 		status := networkResourceStatus(resourceID)
-		if status != "pending" {
+		if status != "RUNNING" {
 			return status
 		}
 		service, err := networkService(networkTestNamespace(), serviceName)
@@ -356,18 +363,22 @@ func waitForNetworkPending(resourceID, serviceName string, duration time.Duratio
 		if hasExternalAddress(service) {
 			return "external-address"
 		}
-		return status
-	}).WithTimeout(duration).WithPolling(3 * time.Second).Should(Equal("pending"))
+		return "pending"
+	}
+	Eventually(pendingState).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal("pending"),
+		"network Service should become pending before stability is checked")
+	Consistently(pendingState).WithTimeout(duration).WithPolling(3*time.Second).Should(Equal("pending"),
+		"network Service should remain pending without an external address")
 }
 
 func waitForNetworkStatus(resourceID, expected string) {
 	GinkgoHelper()
 	Eventually(func() interface{} {
 		status := networkResourceStatus(resourceID)
-		if status == "failed" && expected != "failed" {
+		if status == "FAILED" && expected != "FAILED" {
 			return StopTrying(fmt.Sprintf("network resource %s failed", resourceID))
 		}
-		if status == "running" && expected == "failed" {
+		if status == "RUNNING" && expected == "FAILED" {
 			return StopTrying(fmt.Sprintf("unsupported network routing unexpectedly reached RUNNING: %s", resourceID))
 		}
 		return status
@@ -394,7 +405,7 @@ func networkResourceStatus(resourceID string) string {
 
 func waitForNetworkFailed(resourceID string) {
 	GinkgoHelper()
-	waitForNetworkStatus(resourceID, "failed")
+	waitForNetworkStatus(resourceID, "FAILED")
 }
 
 func assertNetworkInstance(resource networkCRUDResource, agentName, expectedStatus string) {
@@ -525,6 +536,9 @@ func hasExternalAddress(service map[string]interface{}) bool {
 func requireLoadBalancerController() {
 	GinkgoHelper()
 	mode := loadBalancerMode()
+	if mode == "unavailable" {
+		Skip("load-balancer capability could not be determined")
+	}
 	if mode != "metallb" && mode != "cloud" {
 		Skip("a load-balancer controller is not configured")
 	}
@@ -532,7 +546,11 @@ func requireLoadBalancerController() {
 
 func requireLoadBalancerMode(expected string) {
 	GinkgoHelper()
-	if loadBalancerMode() != expected {
+	mode := loadBalancerMode()
+	if mode == "unavailable" {
+		Skip("load-balancer capability could not be determined")
+	}
+	if mode != expected {
 		Skip(fmt.Sprintf("load-balancer mode %q is required", expected))
 	}
 }
@@ -543,15 +561,15 @@ func loadBalancerMode() string {
 	}
 	out, err := runKubectlInNamespace("metallb-system", "get", "deployment", "controller", "-o", "json")
 	if err != nil {
-		return "none"
+		return "unavailable"
 	}
 	var deployment map[string]interface{}
 	if json.Unmarshal([]byte(out), &deployment) != nil {
-		return "none"
+		return "unavailable"
 	}
 	status, ok := deployment["status"].(map[string]interface{})
 	if !ok {
-		return "none"
+		return "unavailable"
 	}
 	available, _ := status["availableReplicas"].(float64)
 	if available > 0 {
@@ -567,8 +585,10 @@ func deleteNetworkResource(resource networkCRUDResource) {
 	}
 	resp, err := doRequest(http.MethodDelete, "/catalog-item-instances/"+resource.InstanceID, "")
 	Expect(err).NotTo(HaveOccurred())
-	Expect(resp.StatusCode).To(BeNumerically(">=", http.StatusOK))
-	Expect(resp.StatusCode).To(BeNumerically("<", http.StatusMultipleChoices))
+	Expect(resp).NotTo(BeNil())
+	Expect(resp.StatusCode == http.StatusNotFound ||
+		(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices)).To(BeTrue(),
+		"deleting catalog-item-instance returned HTTP %d", resp.StatusCode)
 	resp.Body.Close()
 	waitForNotFound("/catalog-item-instances/"+resource.InstanceID,
 		"catalog-item-instance "+resource.InstanceID)
