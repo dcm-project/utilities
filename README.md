@@ -173,6 +173,7 @@ make help
 | `DCM_ACM_CLUSTER_SP_URL` | `http://localhost:8083/api/v1alpha1` | ACM Cluster SP direct URL (requires published port) |
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS server URL for status event tests |
 | `DCM_CLI_PATH` | (auto-resolved) | Path to `dcm` CLI binary |
+| `DCM_NETWORK_LB_MODE` | (auto-detect MetalLB) | Network E2E LoadBalancer mode: `none`, `metallb`, or `cloud` |
 | `JUNIT_REPORT` | (none) | JUnit XML report filename (e.g. `make test-e2e JUNIT_REPORT=results.xml`) |
 
 ### Test Harness Flags

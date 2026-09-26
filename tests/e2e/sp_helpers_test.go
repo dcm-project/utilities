@@ -97,8 +97,14 @@ func expectRFC9457Problem(resp *http.Response, want problemDetailExpectation) Pr
 	var problem ProblemDetail
 	decodeJSON(resp, &problem)
 
-	Expect(problem.Type).To(Equal(problemTypeBaseURI + want.TypeSuffix))
-	Expect(problem.Title).To(Equal(want.Title))
+	Expect(problem.Type).NotTo(BeEmpty())
+	Expect(problem.Title).NotTo(BeEmpty())
+	if want.TypeSuffix != "" {
+		Expect(problem.Type).To(Equal(problemTypeBaseURI + want.TypeSuffix))
+	}
+	if want.Title != "" {
+		Expect(problem.Title).To(Equal(want.Title))
+	}
 	Expect(problem.Status).To(Equal(want.Status))
 	if want.Detail != "" {
 		Expect(problem.Detail).To(Equal(want.Detail))
@@ -277,7 +283,7 @@ func (c *NATSCollector) WaitForStatus(instanceID, status string, timeout time.Du
 			}
 		}
 		return false
-	}).WithTimeout(timeout).WithPolling(500 * time.Millisecond).Should(BeTrue(),
+	}).WithTimeout(timeout).WithPolling(500*time.Millisecond).Should(BeTrue(),
 		fmt.Sprintf("timed out waiting for status %q on instance %s", status, instanceID))
 	return matched
 }
@@ -348,7 +354,6 @@ func findDeploymentName(containerID string) string {
 		"no Deployment found with label %s", selector)
 	return name
 }
-
 
 // --- Podman helpers ------------------------------------------------------- //
 
