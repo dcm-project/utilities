@@ -176,6 +176,10 @@ make help
 | `DCM_NETWORK_LB_MODE` | (auto-detect MetalLB) | Network E2E LoadBalancer mode: `none`, `metallb`, or `cloud` |
 | `JUNIT_REPORT` | (none) | JUnit XML report filename (e.g. `make test-e2e JUNIT_REPORT=results.xml`) |
 
+The network NodePort tests select an unused port after listing Services across
+the cluster. The test identity needs permission to list Services in all
+namespaces.
+
 ### Test Harness Flags
 
 The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained control:
@@ -192,9 +196,8 @@ The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained
 # Service provider tests
 ./tests/run-e2e.sh --k8s-container-service-provider --cluster-api https://api.example.com:6443
 ./tests/run-e2e.sh --k8s-storage-service-provider --kubeconfig ~/.kube/config
-# Network (embedded agent): planned — see FLPATH-4914 / test-plans/FLPATH-3227-k8s-network-sp.md
-# Do not run until tests/e2e/network_sp_api_test.go lands (empty filter can exit 0):
-# ./tests/run-e2e.sh --skip-deploy --label-filter "sp && network"
+# Network (embedded environment agent; requires kubectl/oc access to the target cluster)
+./tests/run-e2e.sh --skip-deploy --label-filter "sp && network"
 ./tests/run-e2e.sh --skip-deploy --label-filter "sp && container"
 
 # ACM cluster SP tests

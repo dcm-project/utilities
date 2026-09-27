@@ -339,6 +339,16 @@ func runKubectl(args ...string) (string, error) {
 	return string(out), err
 }
 
+// runKubectlAllNamespaces executes a cluster-wide kubectl/oc command.
+func runKubectlAllNamespaces(args ...string) (string, error) {
+	cmd := exec.Command(kubectlBin, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		GinkgoWriter.Printf("kubectl %v failed: %s\n", args, string(out))
+	}
+	return string(out), err
+}
+
 // findDeploymentName returns the Kubernetes Deployment name for a DCM
 // container instance. The SP uses GenerateName so the actual Deployment
 // name has a random suffix; this helper resolves it via label selector.

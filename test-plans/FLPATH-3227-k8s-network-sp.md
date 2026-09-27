@@ -162,20 +162,20 @@ If host 8080 is occupied, use compose override `9080:8080` and set
 
 ## Service type inference (reference)
 
-Status vocabulary (do not conflate):
+Network status vocabulary:
 
-| Layer | Field | Typical values | Owner of assertion |
-|-------|-------|----------------|--------------------|
-| **Control-plane** instance / STI | lifecycle status | `RUNNING`, … | E2E polls until `RUNNING` (same as `core_platform_test.go`) |
-| **Network SP** resource status | SP status | `READY`, `PENDING`, `DELETED` | Assert against **cluster class** below — not a free “either” |
+The Network E2E reads the Network SP status through the control-plane
+`/service-type-instances/{id}` endpoint. That endpoint persists the Network SP
+CloudEvent status in lowercase. Do not apply the container/VM `RUNNING`
+lifecycle expectation to Network resources.
 
-| `routing_level` | `node_ports` | K8s Service type | CP instance | Network SP status |
-|-----------------|--------------|------------------|-------------|-------------------|
-| omitted | No | ClusterIP | RUNNING | READY |
-| omitted | Yes | NodePort | RUNNING | READY |
-| `network` | No | LoadBalancer | RUNNING | `PENDING` if `no-lb-controller`; `READY` if MetalLB/cloud LB |
-| `network` | Yes | LoadBalancer | RUNNING | same as row above |
-| `application` | — | — | create fails | Error (Ingress not supported v1) |
+| `routing_level` | `node_ports` | K8s Service type | STI status through control-plane | Expected condition |
+|-----------------|--------------|------------------|----------------------------------|--------------------|
+| omitted | No | ClusterIP | `ready` | Service is usable |
+| omitted | Yes | NodePort | `ready` | Service is usable |
+| `network` | No | LoadBalancer | `pending` without an LB controller; `ready` with MetalLB/cloud LB | External address determines readiness |
+| `network` | Yes | LoadBalancer | same as row above | External address determines readiness |
+| `application` | — | — | `failed` | Ingress is not supported in v1 |
 
 PENDING is **not** a universal pass or fail — it depends on LB availability and
 provider/NATS wiring (see KB `facts/flightpath/dcm.md`).
@@ -248,8 +248,8 @@ Provision via catalog item instance with no `routing_level`, `node_ports`, or
 | Step | Action | Expected |
 |------|--------|----------|
 | 1 | Create catalog item + routing policy + instance | HTTP 201 |
-| 2 | Poll CP instance / STI until RUNNING (or timeout) | CP status `RUNNING` |
-| 3 | GET instance (and STI if exposed) | Spec matches create; network SP status `READY` |
+| 2 | Poll the service-type instance until ready (or timeout) | STI status `ready` |
+| 3 | GET service-type instance | Spec matches create; status `ready` |
 | 4 | `$CLUSTER_CLI get svc e2e-clusterip-smoke -n <ns>` | `TYPE=ClusterIP`, allocated (not `None`) ClusterIP, DCM labels |
 | 5 | Spec round-trip on instance / cluster object | `protocol: TCP`, `port: 80`, `target_port: 8080` |
 
@@ -283,8 +283,8 @@ No `routing_level`; `provider_hints.kubernetes.node_ports` maps port name → No
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Provision via CP | HTTP 201; poll CP until `RUNNING` |
-| 2 | GET instance / STI | Spec includes `node_ports`; network SP status `READY` |
+| 1 | Provision via CP | HTTP 201; poll service-type instance until `ready` |
+| 2 | GET service-type instance | Spec includes `node_ports`; status `ready` |
 | 3 | `$CLUSTER_CLI get svc e2e-nodeport-smoke -n <ns>` | `TYPE=NodePort`; `protocol: TCP`, `port: 80`, `targetPort: 8080`, `nodePort` 30080 |
 | 4 | Cleanup | Service + CP resources deleted |
 
@@ -294,10 +294,10 @@ No `routing_level`; `provider_hints.kubernetes.node_ports` maps port name → No
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Provision via CP | HTTP 201; poll CP until `RUNNING` |
-| 2 | GET instance / STI | Spec includes `routing_level` + `node_ports` |
+| 1 | Provision via CP | HTTP 201; poll service-type instance according to the controller mode |
+| 2 | GET service-type instance | Spec includes `routing_level` + `node_ports` |
 | 3 | `$CLUSTER_CLI get svc … -o yaml` | `type: LoadBalancer`; `protocol: TCP`, `port: 80`, `targetPort: 8080`, `nodePort` as requested |
-| 4 | Network SP status | If labeled `no-lb-controller`: stay `PENDING` (~2 min). If MetalLB/cloud: poll until `READY`. Do **not** accept either on every cluster. |
+| 4 | Service-type instance status | If labeled `no-lb-controller`: stay `pending` (~2 min). If MetalLB/cloud: poll until `ready`. Do **not** accept either on every cluster. |
 | 5 | Cleanup | Service + CP resources deleted |
 
 #### E2E-13: Headless ClusterIP `lab-default`, `crud`, `cluster`
@@ -327,9 +327,9 @@ the regular ClusterIP default and the headless behavior cannot mask each other.
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | Provision with `routing_level: "network"`, no `node_ports` | HTTP 201; CP may reach `RUNNING` |
+| 1 | Provision with `routing_level: "network"`, no `node_ports` | HTTP 201; service-type instance remains `pending` |
 | 2 | `$CLUSTER_CLI get svc` | `TYPE=LoadBalancer`, no external IP |
-| 3 | Poll **network SP** status ~2 min | Still `PENDING` (**pass** only on `no-lb-controller`) |
+| 3 | Poll service-type instance ~2 min | Still `pending` (**pass** only on `no-lb-controller`) |
 
 #### E2E-12: Controller-backed LoadBalancer reaches READY `requires-lb-controller`, `crud`, `cluster`
 
