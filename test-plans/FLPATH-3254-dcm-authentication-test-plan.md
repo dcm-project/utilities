@@ -1897,7 +1897,7 @@ curl -s -o /dev/null -w 'HTTP %{http_code}\n' "${DCM_API_URL}/api/v1alpha1/catal
 
 ### Latest validation evidence
 
-The following evidence was collected from the current auth-enabled DCM/RHDH test environment. It is execution evidence, not a claim that the complete plan has run:
+The following evidence was collected from the current auth-enabled DCM test environment. It is execution evidence, not a claim that the complete plan has run:
 
 | Test | Result | Evidence |
 |---|---|---|
@@ -1905,7 +1905,7 @@ The following evidence was collected from the current auth-enabled DCM/RHDH test
 | TC-04 | ✅ Passed | RHBK password-grant login for the configured test user returned a valid access token. |
 | TC-16 | ✅ Passed | Protected catalog request without a Bearer token returned HTTP 401. |
 | TC-26 | ✅ Passed | The unauthenticated response used the expected `application/problem+json` format. |
-| TC-41 | ✅ Passed | Utilities PR #57 auth matrix ran 2/2 auth specs successfully; 0 failures. |
+| TC-41 | ✅ Passed | Utilities PR #57 DCM API auth matrix ran 2/2 auth specs successfully; 0 failures. This does not cover RHDH UI token forwarding. |
 
 TC-39 and TC-40 have not been marked passed by route availability alone. They require an authenticated RHDH browser session and evidence that the session-associated DCM token is forwarded to DCM.
 
@@ -2154,11 +2154,11 @@ Log out the test user.
 **Priority:** P2 (important)
 **Type:** Functional / CI
 **Method:** Automated coverage merged in [utilities#57](https://github.com/dcm-project/utilities/pull/57); local auth-enabled execution verified; Jenkins execution not yet verified
-**Requires:** Utilities PR #57 merged and a Jenkins environment that can run `ENABLE_DCM_AUTH`
+**Requires:** Utilities PR #57 merged, Keycloak credentials for the DCM API client, and a Jenkins environment that can run `ENABLE_DCM_AUTH`
 
 #### Description
 
-Validates the merged utilities authentication matrix. It distinguishes the auth-disabled no-token path, the auth-enabled anonymous rejection, and the auth-enabled authenticated user-token success path. The local auth-enabled validation of PR #57 passed 2/2 auth specs with no failures; Jenkins execution remains unverified.
+Validates the merged utilities DCM API authentication matrix. It distinguishes the auth-disabled no-token path, the auth-enabled anonymous rejection, and the auth-enabled API request authenticated with a Keycloak-issued Bearer token. The local auth-enabled validation of PR #57 passed 2/2 auth specs with no failures; Jenkins execution remains unverified. This case does not validate RHDH login, RHDH session cookies, `X-DCM-OIDC-Token`, or `/dcm` UI behavior; those remain TC-39 and TC-40.
 
 #### Prerequisites
 
@@ -2175,9 +2175,9 @@ Validates the merged utilities authentication matrix. It distinguishes the auth-
 
 **Expected:** The anonymous request returns HTTP 401.
 
-**Step 3: Run with `ENABLE_DCM_AUTH=true` as an authenticated RHDH user.**
+**Step 3: Run with `ENABLE_DCM_AUTH=true` using the configured authenticated DCM API client.**
 
-**Expected:** The authenticated user-token request succeeds. Preserve redacted evidence of the user-token propagation path; do not mark Jenkins passed until a run is verified.
+**Expected:** The authenticated DCM API request succeeds with a Bearer token. Preserve redacted token evidence; do not treat this result as evidence of RHDH user-token forwarding, and do not mark Jenkins passed until a Jenkins run is verified.
 
 #### Cleanup
 
@@ -2517,7 +2517,7 @@ Remaining manual-only / gap TCs (TC-01–TC-35):
 | TC-38 | SP health under auth | ❗ QA-gated; not yet executed against the FLPATH-4622 candidate |
 | TC-39 | RHDH authenticated user-token forwarding | Pending authenticated RHDH UI-session execution; route and RHBK test user verified |
 | TC-40 | Authenticated `/dcm` known-fixture view | Pending TC-39 authenticated-session evidence |
-| TC-41 | `ENABLE_DCM_AUTH` authentication matrix | [utilities#57](https://github.com/dcm-project/utilities/pull/57) merged; local auth matrix passed 2/2; Jenkins execution unverified |
+| TC-41 | `ENABLE_DCM_AUTH` authentication matrix | [utilities#57](https://github.com/dcm-project/utilities/pull/57) merged; local DCM API auth matrix passed 2/2; Jenkins execution unverified; RHDH UI forwarding remains TC-39/TC-40 |
 | TC-42 | Keycloak restart baseline resilience | Not automated — planned utilities E2E |
 | TC-43 | User-token forwarding trust boundary | Not automated — planned utilities E2E |
 | TC-44 | JWT rejection matrix | Partial subsystem coverage; full matrix not yet automated |
@@ -2606,7 +2606,7 @@ Base path for subsystem links: [`dcm-project/control-plane` `test/subsystem/`](h
 | [ ] ❗ | TC-38 | Service provider health remains ready with auth enabled | — ❗ QA-gated; not yet executed against the FLPATH-4622 candidate |
 | [ ] | TC-39 | RHDH backend forwards the authenticated user's DCM OIDC token | Pending authenticated RHDH UI-session execution; route and RHBK test user verified |
 | [ ] | TC-40 | Authenticated user opens `/dcm` and sees known provider/catalog data | Pending TC-39 authenticated-session evidence |
-| [x] | TC-41 | Utilities authentication matrix via `ENABLE_DCM_AUTH` | [utilities#57](https://github.com/dcm-project/utilities/pull/57) merged; local auth matrix passed 2/2; Jenkins execution unverified |
+| [x] | TC-41 | Utilities authentication matrix via `ENABLE_DCM_AUTH` | [utilities#57](https://github.com/dcm-project/utilities/pull/57) merged; local DCM API auth matrix passed 2/2; Jenkins execution unverified; RHDH UI forwarding remains TC-39/TC-40 |
 | [ ] | TC-42 | Keycloak restart baseline resilience | — |
 | [ ] | TC-43 | User-token forwarding trust boundary | — |
 | [ ] | TC-44 | JWT rejection matrix | — partial subsystem coverage only |
