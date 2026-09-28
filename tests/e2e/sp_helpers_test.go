@@ -97,8 +97,8 @@ func expectRFC9457Problem(resp *http.Response, want problemDetailExpectation) Pr
 	var problem ProblemDetail
 	decodeJSON(resp, &problem)
 
-	Expect(problem.Type).NotTo(BeEmpty())
-	Expect(problem.Title).NotTo(BeEmpty())
+	Expect(strings.TrimSpace(problem.Type)).NotTo(BeEmpty())
+	Expect(strings.TrimSpace(problem.Title)).NotTo(BeEmpty())
 	if want.TypeSuffix != "" {
 		Expect(problem.Type).To(Equal(problemTypeBaseURI + want.TypeSuffix))
 	}
