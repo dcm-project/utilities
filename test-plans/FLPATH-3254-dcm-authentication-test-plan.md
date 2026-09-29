@@ -2290,7 +2290,7 @@ Verify authentication rejection for malformed, expired, invalid-signature, wrong
 
 **Step 1: Send each invalid token category to the protected endpoint:** missing Bearer token, malformed JWT, expired JWT, invalid signature, wrong issuer, and wrong audience.
 
-**Expected:** Each request returns HTTP 401 with the documented problem response. No invalid token is forwarded successfully through the RHDH backend.
+**Expected:** Each request sent directly to the protected DCM endpoint returns HTTP 401 with the documented problem response. RHDH token-forwarding behavior is covered separately by TC-43.
 
 **Step 2: Send a valid DCM user token.**
 
@@ -2548,8 +2548,8 @@ Remaining manual-only / gap TCs (TC-01–TC-35):
 | 1.7 | 2026-07-22 | Added automation coverage section mapping 22 of 35 TCs to subsystem test suite ([control-plane#32](https://github.com/dcm-project/control-plane/pull/32)). 27 Ginkgo specs cover TC-01, TC-03-07, TC-09-12b, TC-15-21, TC-24, TC-26-27. Remaining 13 TCs documented as manual-only with rationale |
 | 1.8 | 2026-08-05 | Added full-stack/E2E gap TCs TC-36–TC-46 (CLI, UI M2M, SP under auth, instance under auth, wrong audience, alg:none, Jenkins ENABLE_DCM_AUTH, JWKS restart). Clarified TC-08/TC-14 notes, CI port 9080, and the then-known E2E gaps. Total: 46 test cases |
 | 1.8.1 | 2026-08-07 | Review trim: drop CLI + JWT-negative E2E TCs; renumber gaps to TC-36–TC-42; document the then-current FLPATH-4622/UI dependencies; fix catalog-item-instances API + `health_status`; port convention; Ecosystem Jenkins; TC-08 CP-only; mark TC-02 automated via catalog/policy/sp (`AUTH_DISABLED=true`); clarify TC-30 not covered by those suites. Total numbered TCs: 42 (+ TC-11b/12b) |
-| 2.0 | 2026-09-28 | Terra-reviewed authentication-only update: scope and acceptance criteria exclude authorization, RBAC, tenant isolation, policy enforcement, and access control; rewrote RHDH user-token propagation (TC-39) and authenticated `/dcm` flow (TC-40); updated merged utilities PR #57 matrix (TC-41) without claiming Jenkins execution; changed TC-36–TC-38 to QA-gated FLPATH-4622 candidate execution; removed the obsolete UI-ticket dependency; added TC-43–TC-46 for trust boundary, JWT rejection, JWKS/signing-key rotation, and token redaction. Total numbered TCs: 46 (+ TC-11b/12b) |
-| 2.1 | 2026-09-28 | Recorded fresh auth-enabled validation: TC-01, TC-04, TC-16, TC-26, and TC-41 passed; utilities PR #57 auth matrix passed 2/2 locally; clarified that TC-39/TC-40 require an authenticated RHDH browser session and are not blocked by route or RHBK-user availability. |
+| 2.0 | 2026-09-28 | Authentication-only update: scope and acceptance criteria exclude authorization, RBAC, tenant isolation, policy enforcement, and access control; rewrote RHDH user-token propagation (TC-39) and authenticated `/dcm` flow (TC-40); updated merged utilities PR #57 matrix (TC-41) without claiming Jenkins execution; changed TC-36–TC-38 to QA-gated FLPATH-4622 candidate execution; removed the obsolete UI-ticket dependency; added TC-43–TC-46 for trust boundary, JWT rejection, JWKS/signing-key rotation, and token redaction. Total numbered TCs: 46 (+ TC-11b/12b) |
+| 2.1 | 2026-09-28 | Recorded fresh auth-enabled validation: TC-01, TC-04, TC-16, TC-26, and TC-41 passed; utilities PR #57 auth matrix passed 2/2 locally; clarified that TC-39/TC-40 require an authenticated RHDH browser session and are not blocked by route or RHBK-user availability. Documented the Jenkins gap: upstream `dcm_deploy.groovy` still passes unsupported auth flags, so TC-41 remains unverified in Jenkins pending a pipeline fix. |
 
 ---
 
