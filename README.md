@@ -38,10 +38,10 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 
 `scripts/deploy-dcm.sh` automates the full DCM stack lifecycle for E2E testing:
 
-1. Clones the [control-plane](https://github.com/dcm-project/control-plane) repo (`deploy/compose.yaml`)
+1. Clones the [control-plane](https://github.com/dcm-project/control-plane) repo and uses `deploy/compose.yaml`; auth mode also loads `deploy/compose.auth.yaml` with the `auth` profile
 2. Bootstraps `deploy/.env` from `deploy/.env.example` (compose credentials; see control-plane `deploy/RUN.md`)
-3. Starts all services with `podman-compose up`
-4. Polls health endpoints until every service responds 2xx
+3. Starts the selected Compose model with `podman-compose up`
+4. Polls the control-plane health endpoint until it responds 2xx
 5. Resolves running container images to git commit SHAs via the Quay.io API
 
 ### Prerequisites
@@ -79,7 +79,7 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 # 8. Deploy ACM cluster provider (install ACM first if needed)
 ./scripts/deploy-dcm.sh --acm-cluster-service-provider --deploy-acm --kubeconfig ~/.kube/config
 
-# 9. Deploy with authentication enabled (Keycloak + JWT validation)
+# 9. Deploy with auth override and profile (Keycloak + JWT validation)
 ./scripts/deploy-dcm.sh --auth-enabled
 
 # 10. Deploy with the GitOps reconciliation container
@@ -173,6 +173,7 @@ make help
 | `DCM_ACM_CLUSTER_SP_URL` | `http://localhost:8083/api/v1alpha1` | ACM Cluster SP direct URL (requires published port) |
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS server URL for status event tests |
 | `DCM_CLI_PATH` | (auto-resolved) | Path to `dcm` CLI binary |
+| `DCM_NETWORK_LB_MODE` | (auto-detect MetalLB) | Network E2E LoadBalancer mode: `none`, `metallb`, or `cloud` |
 | `JUNIT_REPORT` | (none) | JUnit XML report filename (e.g. `make test-e2e JUNIT_REPORT=results.xml`) |
 | `DCM_AUTH_ENABLED` | `false` | Enable OIDC bearer authentication for API and CLI requests |
 | `DCM_AUTH_ISSUER_URL` | (none) | OIDC issuer URL; required when authentication is enabled |
@@ -182,6 +183,10 @@ make help
 | `DCM_AUTH_PASSWORD` | (none) | OIDC password for password-grant tokens |
 | `DCM_AUTH_TOKEN` | (none) | Optional static bearer token; avoids the password grant |
 | `DCM_AUTH_CA_FILE` | (none) | Optional CA bundle for the OIDC issuer |
+
+The network NodePort tests select an unused port after listing Services across
+the cluster. The test identity needs permission to list Services in all
+namespaces.
 
 ### Test Harness Flags
 
@@ -199,9 +204,8 @@ The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained
 # Service provider tests
 ./tests/run-e2e.sh --k8s-container-service-provider --cluster-api https://api.example.com:6443
 ./tests/run-e2e.sh --k8s-storage-service-provider --kubeconfig ~/.kube/config
-# Network (embedded agent): planned — see FLPATH-4914 / test-plans/FLPATH-3227-k8s-network-sp.md
-# Do not run until tests/e2e/network_sp_api_test.go lands (empty filter can exit 0):
-# ./tests/run-e2e.sh --skip-deploy --label-filter "sp && network"
+# Network (embedded environment agent; requires kubectl/oc access to the target cluster)
+./tests/run-e2e.sh --skip-deploy --label-filter "sp && network"
 ./tests/run-e2e.sh --skip-deploy --label-filter "sp && container"
 
 # Authentication-disabled mode (the default)
