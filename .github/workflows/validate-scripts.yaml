@@ -11,6 +11,8 @@ on:
       - 'tests/run-e2e.sh'
       - 'tests/e2e/**'
       - 'tests/fixtures/podman-compose-networking.yaml'
+      - 'tests/test-osac-ca-validation.sh'
+      - 'tests/compose-osac-sp-tls.yaml'
       - 'providers/*.conf'
       - '.github/workflows/validate-scripts.yaml'
   workflow_dispatch:
@@ -163,6 +165,10 @@ jobs:
     name: podman-compose networking
     runs-on: ubuntu-latest
     timeout-minutes: 5
+  validate-osac-ca:
+    name: OSAC CA validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
 
     steps:
       - uses: actions/checkout@v6
@@ -198,6 +204,8 @@ jobs:
           probe_id="$(podman ps -q --filter "label=com.docker.compose.project=${project}" --filter 'label=com.docker.compose.service=probe')"
           test -n "${probe_id}"
           test "$(podman exec "${probe_id}" wget -q -O - http://database:8080/)" = "database"
+      - name: Validate OSAC CA certificate checks
+        run: bash tests/test-osac-ca-validation.sh
 
   validate-e2e-harness:
     name: run-e2e.sh flags
