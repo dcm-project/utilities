@@ -45,11 +45,11 @@ type networkCRUDResource struct {
 var _ = Describe("Network SP API", Label("sp", "network"), func() {
 	var networkAgentName string
 
-	BeforeEach(func() {
-		requireNetworkSP()
-	})
-
 	Context("Phase A wiring", Label("lab-default"), Ordered, func() {
+		BeforeAll(func() {
+			requireNetworkSP()
+		})
+
 		It("E2E-01 verifies control-plane and embedded agent health", func() {
 			assertControlPlaneHealth()
 			assertEmbeddedAgentHealth()
@@ -80,7 +80,10 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 		Context("ClusterIP inference", Label("clusterip"), Ordered, func() {
 			var resource networkCRUDResource
 			var deleted bool
-			BeforeAll(func() { requireKubectl() })
+			BeforeAll(func() {
+				requireNetworkSP()
+				requireKubectl()
+			})
 			AfterAll(func() {
 				if !deleted {
 					cleanupNetworkResource(resource)
@@ -106,7 +109,10 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 		Context("NodePort inference", Label("nodeport"), Ordered, func() {
 			var resource networkCRUDResource
 			var deleted bool
-			BeforeAll(func() { requireKubectl() })
+			BeforeAll(func() {
+				requireNetworkSP()
+				requireKubectl()
+			})
 			AfterAll(func() {
 				if !deleted {
 					cleanupNetworkResource(resource)
@@ -129,96 +135,102 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 			})
 		})
 
-		It("E2E-06 creates a LoadBalancer network without node ports", Label("no-lb-controller"), func() {
-			requireKubectl()
-			requireLoadBalancerMode("none")
-			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
-			opts := networkSpecOptions{
-				namePrefix: "e2e-network-loadbalancer", routingLevel: "network", selectorKey: "app", selectorVal: "e2e-network",
-			}
-			resource := newNetworkResource(opts)
-			DeferCleanup(func() { cleanupNetworkResource(resource) })
-			provisionNetworkResource(&resource, agentName, opts)
-			waitForNetworkPending(resource.ResourceID, resource.ServiceName, 2*time.Minute)
-			assertNetworkService(resource, "LoadBalancer", "", false, "")
-			assertNetworkServiceHasNoExternalIP(resource)
-			assertNetworkInstance(resource, agentName, "pending")
-		})
+		Context("Independent network operations", func() {
+			BeforeEach(func() {
+				requireNetworkSP()
+			})
 
-		It("E2E-12 creates a controller-backed LoadBalancer network", Label("requires-lb-controller"), func() {
-			requireKubectl()
-			requireLoadBalancerController()
-			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
-			opts := networkSpecOptions{
-				namePrefix: "e2e-network-metallb", routingLevel: "network", selectorKey: "app", selectorVal: "e2e-network",
-			}
-			resource := newNetworkResource(opts)
-			DeferCleanup(func() { cleanupNetworkResource(resource) })
-			provisionNetworkResource(&resource, agentName, opts)
-			waitForNetworkReady(resource.ResourceID)
-			assertNetworkService(resource, "LoadBalancer", "", false, "")
-			assertNetworkServiceHasExternalIP(resource)
-			assertNetworkInstance(resource, agentName, "ready")
-		})
-
-		It("E2E-10 creates a LoadBalancer network with a node port", Label("loadbalancer"), func() {
-			requireKubectl()
-			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
-			opts := networkSpecOptions{
-				namePrefix: "e2e-network-loadbalancer-np", routingLevel: "network", nodePort: findUnusedNodePort(), selectorKey: "app", selectorVal: "e2e-network",
-			}
-			resource := newNetworkResource(opts)
-			DeferCleanup(func() { cleanupNetworkResource(resource) })
-			provisionNetworkResource(&resource, agentName, opts)
-			mode := loadBalancerMode()
-			if mode == "unavailable" {
-				Skip("load-balancer capability could not be determined")
-			}
-			if mode != "none" {
-				waitForNetworkReady(resource.ResourceID)
-			} else {
+			It("E2E-06 creates a LoadBalancer network without node ports", Label("no-lb-controller"), func() {
+				requireKubectl()
+				requireLoadBalancerMode("none")
+				agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
+				opts := networkSpecOptions{
+					namePrefix: "e2e-network-loadbalancer", routingLevel: "network", selectorKey: "app", selectorVal: "e2e-network",
+				}
+				resource := newNetworkResource(opts)
+				DeferCleanup(func() { cleanupNetworkResource(resource) })
+				provisionNetworkResource(&resource, agentName, opts)
 				waitForNetworkPending(resource.ResourceID, resource.ServiceName, 2*time.Minute)
-			}
-			assertNetworkService(resource, "LoadBalancer", "", false, "http")
-			if mode != "none" {
+				assertNetworkService(resource, "LoadBalancer", "", false, "")
+				assertNetworkServiceHasNoExternalIP(resource)
+				assertNetworkInstance(resource, agentName, "pending")
+			})
+
+			It("E2E-12 creates a controller-backed LoadBalancer network", Label("requires-lb-controller"), func() {
+				requireKubectl()
+				requireLoadBalancerController()
+				agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
+				opts := networkSpecOptions{
+					namePrefix: "e2e-network-metallb", routingLevel: "network", selectorKey: "app", selectorVal: "e2e-network",
+				}
+				resource := newNetworkResource(opts)
+				DeferCleanup(func() { cleanupNetworkResource(resource) })
+				provisionNetworkResource(&resource, agentName, opts)
+				waitForNetworkReady(resource.ResourceID)
+				assertNetworkService(resource, "LoadBalancer", "", false, "")
 				assertNetworkServiceHasExternalIP(resource)
 				assertNetworkInstance(resource, agentName, "ready")
-			} else {
-				assertNetworkInstance(resource, agentName, "pending")
-			}
-		})
+			})
 
-		It("E2E-13 creates a headless ClusterIP network", Label("headless"), func() {
-			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
-			opts := networkSpecOptions{
-				namePrefix: "e2e-network-headless", clusterIP: "None", selectorKey: "app", selectorVal: "e2e-network",
-			}
-			resource := newNetworkResource(opts)
-			DeferCleanup(func() { cleanupNetworkResource(resource) })
-			provisionNetworkResource(&resource, agentName, opts)
-			waitForNetworkReady(resource.ResourceID)
-			assertNetworkService(resource, "ClusterIP", "None", false, "")
-			assertNetworkInstance(resource, agentName, "ready")
-		})
+			It("E2E-10 creates a LoadBalancer network with a node port", Label("loadbalancer"), func() {
+				requireKubectl()
+				agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
+				opts := networkSpecOptions{
+					namePrefix: "e2e-network-loadbalancer-np", routingLevel: "network", nodePort: findUnusedNodePort(), selectorKey: "app", selectorVal: "e2e-network",
+				}
+				resource := newNetworkResource(opts)
+				DeferCleanup(func() { cleanupNetworkResource(resource) })
+				provisionNetworkResource(&resource, agentName, opts)
+				mode := loadBalancerMode()
+				if mode == "unavailable" {
+					Skip("load-balancer capability could not be determined")
+				}
+				if mode != "none" {
+					waitForNetworkReady(resource.ResourceID)
+				} else {
+					waitForNetworkPending(resource.ResourceID, resource.ServiceName, 2*time.Minute)
+				}
+				assertNetworkService(resource, "LoadBalancer", "", false, "http")
+				if mode != "none" {
+					assertNetworkServiceHasExternalIP(resource)
+					assertNetworkInstance(resource, agentName, "ready")
+				} else {
+					assertNetworkInstance(resource, agentName, "pending")
+				}
+			})
 
-		It("E2E-11 rejects application routing and does not create a Service", Label("contract", "unsupported"), func() {
-			agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
-			opts := networkSpecOptions{
-				namePrefix: "e2e-network-unsupported", routingLevel: "application", selectorKey: "app", selectorVal: "e2e-network",
-			}
-			resource := newNetworkResource(opts)
-			DeferCleanup(func() { cleanupNetworkResource(resource) })
-			provisionNetworkResource(&resource, agentName, opts)
-			waitForNetworkFailed(resource.ResourceID)
-			assertNetworkServiceAbsent(resource)
-		})
+			It("E2E-13 creates a headless ClusterIP network", Label("headless"), func() {
+				agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
+				opts := networkSpecOptions{
+					namePrefix: "e2e-network-headless", clusterIP: "None", selectorKey: "app", selectorVal: "e2e-network",
+				}
+				resource := newNetworkResource(opts)
+				DeferCleanup(func() { cleanupNetworkResource(resource) })
+				provisionNetworkResource(&resource, agentName, opts)
+				waitForNetworkReady(resource.ResourceID)
+				assertNetworkService(resource, "ClusterIP", "None", false, "")
+				assertNetworkInstance(resource, agentName, "ready")
+			})
 
-		It("E2E-08 rejects an incomplete catalog-item instance request", Label("contract"), func() {
-			resp, err := doRequest(http.MethodPost, "/catalog-item-instances", "{}")
-			Expect(err).NotTo(HaveOccurred())
-			defer resp.Body.Close()
-			expectRFC9457Problem(resp, problemDetailExpectation{
-				Status: http.StatusBadRequest,
+			It("E2E-11 rejects application routing and does not create a Service", Label("contract", "unsupported"), func() {
+				agentName := discoverAgentByServiceType("network", os.Getenv("DCM_NETWORK_AGENT_NAME"))
+				opts := networkSpecOptions{
+					namePrefix: "e2e-network-unsupported", routingLevel: "application", selectorKey: "app", selectorVal: "e2e-network",
+				}
+				resource := newNetworkResource(opts)
+				DeferCleanup(func() { cleanupNetworkResource(resource) })
+				provisionNetworkResource(&resource, agentName, opts)
+				waitForNetworkFailed(resource.ResourceID)
+				assertNetworkServiceAbsent(resource)
+			})
+
+			It("E2E-08 rejects an incomplete catalog-item instance request", Label("contract"), func() {
+				resp, err := doRequest(http.MethodPost, "/catalog-item-instances", "{}")
+				Expect(err).NotTo(HaveOccurred())
+				defer resp.Body.Close()
+				expectRFC9457Problem(resp, problemDetailExpectation{
+					Status: http.StatusBadRequest,
+				})
 			})
 		})
 	})
@@ -764,9 +776,9 @@ func assertEmbeddedAgentHealth() {
 	Expect(body).To(HaveKeyWithValue("path", "health"))
 }
 
-// initNetworkSP verifies that the environment agent is reachable and has a
-// ready embedded network provider. It is called from BeforeSuite so Network SP
-// specs can be skipped when the optional agent deployment is absent.
+// initNetworkSP verifies that the environment agent is reachable and waits for
+// its embedded network provider to become ready. It is called from BeforeSuite
+// so Network SP specs can be skipped when the optional agent deployment is absent.
 func initNetworkSP() {
 	networkAgentBaseURL = strings.TrimRight(os.Getenv("DCM_AGENT_URL"), "/")
 	if networkAgentBaseURL == "" {
@@ -784,31 +796,26 @@ func initNetworkSP() {
 		return
 	}
 
-	resp, err = unauthenticatedClient.Get(networkAgentBaseURL + "/providers")
-	if err != nil {
-		GinkgoWriter.Printf("Network agent providers endpoint is not reachable at %s: %v — Network SP tests will be skipped\n", networkAgentBaseURL, err)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		GinkgoWriter.Printf("Network agent providers endpoint returned %d — Network SP tests will be skipped\n", resp.StatusCode)
+	if waitForNetworkProvider(30 * time.Second) {
+		networkSPReady = true
+		GinkgoWriter.Printf("Network SP ready through agent at %s\n", networkAgentBaseURL)
 		return
 	}
 
-	var providers networkAgentProviderList
-	if err := json.NewDecoder(resp.Body).Decode(&providers); err != nil {
-		GinkgoWriter.Printf("Network agent providers response is invalid: %v — Network SP tests will be skipped\n", err)
-		return
-	}
-	for _, provider := range providers.Results {
-		if provider.ServiceType == "network" && provider.Type == "embedded" && provider.Status == "Ready" {
-			networkSPReady = true
-			GinkgoWriter.Printf("Network SP ready through agent at %s\n", networkAgentBaseURL)
-			return
+	GinkgoWriter.Printf("Network SP did not become ready through agent at %s within 30s — Network SP tests will be skipped\n", networkAgentBaseURL)
+}
+
+func waitForNetworkProvider(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if embeddedNetworkProviderReady() {
+			return true
 		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(2 * time.Second)
 	}
-
-	GinkgoWriter.Printf("Network SP is not ready through agent at %s — Network SP tests will be skipped\n", networkAgentBaseURL)
 }
 
 func requireNetworkSP() {
@@ -818,29 +825,30 @@ func requireNetworkSP() {
 }
 
 func waitForEmbeddedNetworkProvider() {
-	Eventually(func() bool {
-		resp, err := networkAgentRequest(http.MethodGet, "/providers")
-		if err != nil || resp == nil {
-			return false
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return false
-		}
-
-		var body networkAgentProviderList
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return false
-		}
-		for _, provider := range body.Results {
-			if provider.ServiceType == "network" &&
-				provider.Type == "embedded" && provider.Status == "Ready" {
-				return true
-			}
-		}
-		return false
-	}).WithTimeout(30*time.Second).WithPolling(2*time.Second).Should(BeTrue(),
+	Eventually(embeddedNetworkProviderReady).WithTimeout(30*time.Second).WithPolling(2*time.Second).Should(BeTrue(),
 		"embedded network provider should be registered and Ready")
+}
+
+func embeddedNetworkProviderReady() bool {
+	resp, err := networkAgentRequest(http.MethodGet, "/providers")
+	if err != nil || resp == nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	var providers networkAgentProviderList
+	if err := json.NewDecoder(resp.Body).Decode(&providers); err != nil {
+		return false
+	}
+	for _, provider := range providers.Results {
+		if provider.ServiceType == "network" && provider.Type == "embedded" && provider.Status == "Ready" {
+			return true
+		}
+	}
+	return false
 }
 
 func networkAgentRequest(method, path string) (*http.Response, error) {

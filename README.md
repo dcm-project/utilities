@@ -184,6 +184,13 @@ make help
 | `DCM_AUTH_TOKEN` | (none) | Optional static bearer token; avoids the password grant |
 | `DCM_AUTH_CA_FILE` | (none) | Optional CA bundle for the OIDC issuer |
 
+Network SP specifications run only when the environment agent is reachable at
+`DCM_AGENT_URL` and reports an embedded `network` provider with status `Ready`.
+The suite waits up to 30 seconds for that provider after the agent becomes
+healthy; otherwise it reports the Network specifications as skipped. Start the
+environment-agent profile with `AGENT_EMBEDDED_SPS=network` and publish its API
+port to enable this coverage.
+
 The network NodePort tests select an unused port after listing Services across
 the cluster. The test identity needs permission to list Services in all
 namespaces.
