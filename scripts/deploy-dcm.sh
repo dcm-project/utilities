@@ -374,23 +374,66 @@ validate_acm_cluster_provider() {
 
     ensure_provider_namespace "${kubeconfig}" "${namespace}" oc
 
-    # Resolve pull secret for the SP. Order:
-    #   1. ACM_CLUSTER_SP_PULL_SECRET env var (already set by user)
-    #   2. Extract from the cluster's global pull-secret
-    if [[ -z "${ACM_CLUSTER_SP_PULL_SECRET:-}" ]]; then
-        info "Resolving pull secret from cluster..."
-        local pull_json
-        pull_json=$(oc --kubeconfig="${kubeconfig}" get secret pull-secret \
-            -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' 2>/dev/null || echo "")
-        if [[ -n "${pull_json}" ]]; then
-            ACM_CLUSTER_SP_PULL_SECRET="${pull_json}"
-            info "Pull secret resolved from openshift-config/pull-secret"
-        else
-            info "WARNING: Could not extract pull secret from cluster — SP may fail to start"
-            info "Set ACM_CLUSTER_SP_PULL_SECRET env var manually if needed"
-        fi
+    resolve_cluster_pull_secret "${kubeconfig}" || return 1
+}
+
+# Resolve pull secret for ACM / embedded cluster SP.
+# Prefer ACM_CLUSTER_SP_PULL_SECRET or SP_PULL_SECRET if already set; otherwise
+# extract base64 .dockerconfigjson from openshift-config/pull-secret.
+resolve_cluster_pull_secret() {
+    local kubeconfig="$1"
+
+    if [[ -n "${SP_PULL_SECRET:-}" ]]; then
+        export ACM_CLUSTER_SP_PULL_SECRET="${ACM_CLUSTER_SP_PULL_SECRET:-${SP_PULL_SECRET}}"
+        return 0
     fi
-    export ACM_CLUSTER_SP_PULL_SECRET="${ACM_CLUSTER_SP_PULL_SECRET:-}"
+    if [[ -n "${ACM_CLUSTER_SP_PULL_SECRET:-}" ]]; then
+        export SP_PULL_SECRET="${SP_PULL_SECRET:-${ACM_CLUSTER_SP_PULL_SECRET}}"
+        return 0
+    fi
+
+    info "Resolving pull secret from cluster..."
+    local pull_json
+    pull_json=$(oc --kubeconfig="${kubeconfig}" get secret pull-secret \
+        -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' 2>/dev/null || echo "")
+    if [[ -n "${pull_json}" ]]; then
+        export ACM_CLUSTER_SP_PULL_SECRET="${pull_json}"
+        export SP_PULL_SECRET="${pull_json}"
+        info "Pull secret resolved from openshift-config/pull-secret"
+        return 0
+    fi
+
+    err "Could not resolve cluster pull secret (openshift-config/pull-secret)"
+    err "Set SP_PULL_SECRET or ACM_CLUSTER_SP_PULL_SECRET to a base64-encoded .dockerconfigjson"
+    return 1
+}
+
+# Prepare required env for embedded cluster SP (fail-fast before compose up).
+prepare_embedded_cluster_sp() {
+    local kubeconfig="$1"
+
+    SP_CLUSTER_NAMESPACE="${SP_CLUSTER_NAMESPACE:-clusters}"
+    export SP_CLUSTER_NAMESPACE
+    info "Embedded cluster SP namespace: ${SP_CLUSTER_NAMESPACE}"
+    ensure_provider_namespace "${kubeconfig}" "${SP_CLUSTER_NAMESPACE}" oc || return 1
+
+    resolve_cluster_pull_secret "${kubeconfig}" || return 1
+    if [[ -z "${SP_PULL_SECRET:-}" ]]; then
+        err "SP_PULL_SECRET is required when embedding the cluster SP"
+        return 1
+    fi
+}
+
+# Return 0 if AGENT_EMBEDDED_SPS contains the given service type token.
+agent_embeds() {
+    local want="$1"
+    local tok
+    IFS=',' read -ra _agent_embed_toks <<< "${AGENT_EMBEDDED_SPS}"
+    for tok in "${_agent_embed_toks[@]}"; do
+        tok="${tok// /}"
+        [[ "${tok}" == "${want}" ]] && return 0
+    done
+    return 1
 }
 
 # --- Cluster authentication ------------------------------------------------ #
@@ -776,14 +819,14 @@ ensure_deploy_env() {
         upsert_deploy_env_var "${deploy_dir}" "SP_K8S_EXTERNAL_SVC_TYPE" "$(env_or_default SP_K8S_EXTERNAL_SVC_TYPE NodePort)"
         upsert_deploy_env_var "${deploy_dir}" "SP_VM_NAMESPACE" "$(env_or_default SP_VM_NAMESPACE default)"
         upsert_deploy_env_var "${deploy_dir}" "SP_STORAGE_NAMESPACE" "$(env_or_default SP_STORAGE_NAMESPACE default)"
-        if [[ -n "${SP_CLUSTER_NAMESPACE:-}" ]]; then
-            upsert_deploy_env_var "${deploy_dir}" "SP_CLUSTER_NAMESPACE" "${SP_CLUSTER_NAMESPACE}"
-        fi
-        if [[ -n "${SP_PULL_SECRET:-}${ACM_CLUSTER_SP_PULL_SECRET:-}" ]]; then
+        if agent_embeds cluster; then
+            # Required by embedded acmcluster config — never leave empty placeholders
+            # from .env.example (empty SP_PULL_SECRET causes agent exit 1).
+            upsert_deploy_env_var "${deploy_dir}" "SP_CLUSTER_NAMESPACE" "${SP_CLUSTER_NAMESPACE:-clusters}"
             upsert_deploy_env_var "${deploy_dir}" "SP_PULL_SECRET" "${SP_PULL_SECRET:-${ACM_CLUSTER_SP_PULL_SECRET}}"
-        fi
-        if [[ -n "${SP_BASE_DOMAIN:-}" ]]; then
-            upsert_deploy_env_var "${deploy_dir}" "SP_BASE_DOMAIN" "${SP_BASE_DOMAIN}"
+            if [[ -n "${SP_BASE_DOMAIN:-}" ]]; then
+                upsert_deploy_env_var "${deploy_dir}" "SP_BASE_DOMAIN" "${SP_BASE_DOMAIN}"
+            fi
         fi
     fi
 }
@@ -1089,6 +1132,12 @@ if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]]; then
     # Compose bind mounts need an absolute host path.
     if [[ "${DCM_KUBECONFIG}" != /* ]]; then
         DCM_KUBECONFIG="$(cd "$(dirname "${DCM_KUBECONFIG}")" && pwd)/$(basename "${DCM_KUBECONFIG}")"
+    fi
+
+    # Embedded cluster SP needs namespace + pull secret before compose up
+    # (standalone ACM validation is skipped on the agent path).
+    if agent_embeds cluster; then
+        prepare_embedded_cluster_sp "${DCM_KUBECONFIG}" || exit 1
     fi
 fi
 
