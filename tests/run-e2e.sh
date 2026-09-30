@@ -397,7 +397,8 @@ if [[ "${AUTH_ENABLED}" == "true" ]]; then
     fi
     if [[ "${AUTH_TARGET}" == rhdh ]]; then
         export DCM_AUTH_CLIENT_ID="${DCM_AUTH_CLIENT_ID:-rhdh-auth}"
-        export DCM_AUTH_CLIENT_SECRET="$(oc -n "${AUTH_NAMESPACE}" get secret rhdh-auth-secrets -o jsonpath='{.data.KEYCLOAK_CLIENT_SECRET}' | base64 -d)"
+        DCM_AUTH_CLIENT_SECRET="$(oc -n "${AUTH_NAMESPACE}" get secret rhdh-auth-secrets -o jsonpath='{.data.KEYCLOAK_CLIENT_SECRET}' | base64 -d)"
+        export DCM_AUTH_CLIENT_SECRET
         export DCM_AUTH_USERNAME="${DCM_AUTH_USERNAME:-testuser1}"
         export DCM_AUTH_PASSWORD="${DCM_AUTH_PASSWORD:-testuser1}"
     fi
