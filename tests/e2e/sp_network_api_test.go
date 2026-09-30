@@ -194,7 +194,7 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 				provisionNetworkResource(&resource, agentName, opts)
 				mode := loadBalancerMode()
 				if mode == networkStatusUnavailable {
-					Skip("load-balancer capability could not be determined")
+					Fail("load-balancer capability could not be determined; set DCM_NETWORK_LB_MODE explicitly")
 				}
 				if mode != "none" {
 					waitForNetworkReady(resource.ResourceID)
@@ -801,26 +801,16 @@ func initNetworkSP() {
 		networkAgentBaseURL = defaultAgentURL
 	}
 
-	if waitForNetworkProvider(30 * time.Second) {
-		networkSPReady = true
-		GinkgoWriter.Printf("Network SP ready through agent at %s\n", networkAgentBaseURL)
-		return
-	}
-
-	Fail(fmt.Sprintf("Network SP is enabled but did not become ready through agent at %s within 30s", networkAgentBaseURL))
+	waitForNetworkProvider(30 * time.Second)
+	networkSPReady = true
+	GinkgoWriter.Printf("Network SP ready through agent at %s\n", networkAgentBaseURL)
 }
 
-func waitForNetworkProvider(timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		if networkAgentHealthy() && embeddedNetworkProviderReady() {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(2 * time.Second)
-	}
+func waitForNetworkProvider(timeout time.Duration) {
+	Eventually(func() bool {
+		return networkAgentHealthy() && embeddedNetworkProviderReady()
+	}).WithTimeout(timeout).WithPolling(2*time.Second).Should(BeTrue(),
+		"Network SP is enabled but did not become ready through the environment agent")
 }
 
 func requireNetworkSP() {
