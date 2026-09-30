@@ -23,14 +23,15 @@ const (
 )
 
 type authSettings struct {
-	enabled      bool
-	issuerURL    string
-	clientID     string
-	clientSecret string
-	username     string
-	password     string
-	staticToken  string
-	caFile       string
+	enabled        bool
+	issuerURL      string
+	tokenIssuerURL string
+	clientID       string
+	clientSecret   string
+	username       string
+	password       string
+	staticToken    string
+	caFile         string
 }
 
 type tokenResponse struct {
@@ -58,20 +59,24 @@ var (
 
 func loadAuthSettings() (authSettings, error) {
 	settings := authSettings{
-		enabled:      strings.EqualFold(os.Getenv("DCM_AUTH_ENABLED"), "true"),
-		issuerURL:    strings.TrimRight(os.Getenv("DCM_AUTH_ISSUER_URL"), "/"),
-		clientID:     os.Getenv("DCM_AUTH_CLIENT_ID"),
-		clientSecret: os.Getenv("DCM_AUTH_CLIENT_SECRET"),
-		username:     os.Getenv("DCM_AUTH_USERNAME"),
-		password:     os.Getenv("DCM_AUTH_PASSWORD"),
-		staticToken:  os.Getenv("DCM_AUTH_TOKEN"),
-		caFile:       os.Getenv("DCM_AUTH_CA_FILE"),
+		enabled:        strings.EqualFold(os.Getenv("DCM_AUTH_ENABLED"), "true"),
+		issuerURL:      strings.TrimRight(os.Getenv("DCM_AUTH_ISSUER_URL"), "/"),
+		tokenIssuerURL: strings.TrimRight(os.Getenv("DCM_AUTH_TOKEN_ISSUER_URL"), "/"),
+		clientID:       os.Getenv("DCM_AUTH_CLIENT_ID"),
+		clientSecret:   os.Getenv("DCM_AUTH_CLIENT_SECRET"),
+		username:       os.Getenv("DCM_AUTH_USERNAME"),
+		password:       os.Getenv("DCM_AUTH_PASSWORD"),
+		staticToken:    os.Getenv("DCM_AUTH_TOKEN"),
+		caFile:         os.Getenv("DCM_AUTH_CA_FILE"),
 	}
 	if !settings.enabled {
 		return settings, nil
 	}
 	if settings.issuerURL == "" {
 		return settings, fmt.Errorf("DCM_AUTH_ISSUER_URL is required when DCM_AUTH_ENABLED=true")
+	}
+	if settings.tokenIssuerURL == "" {
+		settings.tokenIssuerURL = settings.issuerURL
 	}
 	if settings.clientID == "" {
 		settings.clientID = defaultAuthClientID
@@ -188,8 +193,12 @@ func (p *authTokenProvider) Token(ctx context.Context) (string, error) {
 		"password":      {p.settings.password},
 		"scope":         {"openid"},
 	}
+	tokenIssuerURL := p.settings.tokenIssuerURL
+	if tokenIssuerURL == "" {
+		tokenIssuerURL = p.settings.issuerURL
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		p.settings.issuerURL+"/protocol/openid-connect/token", strings.NewReader(values.Encode()))
+		tokenIssuerURL+"/protocol/openid-connect/token", strings.NewReader(values.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("create auth token request: %w", err)
 	}
