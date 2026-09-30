@@ -17,6 +17,11 @@ import (
 
 const defaultAgentURL = "http://localhost:8081/api/v1alpha1"
 
+var (
+	networkAgentBaseURL string
+	networkSPReady      bool
+)
+
 type networkAgentProvider struct {
 	ServiceType string `json:"service_type"`
 	Status      string `json:"status"`
@@ -39,6 +44,10 @@ type networkCRUDResource struct {
 
 var _ = Describe("Network SP API", Label("sp", "network"), func() {
 	var networkAgentName string
+
+	BeforeEach(func() {
+		requireNetworkSP()
+	})
 
 	Context("Phase A wiring", Label("lab-default"), Ordered, func() {
 		It("E2E-01 verifies control-plane and embedded agent health", func() {
@@ -753,6 +762,59 @@ func assertEmbeddedAgentHealth() {
 	decodeJSON(resp, &body)
 	Expect(body).To(HaveKeyWithValue("status", "healthy"))
 	Expect(body).To(HaveKeyWithValue("path", "health"))
+}
+
+// initNetworkSP verifies that the environment agent is reachable and has a
+// ready embedded network provider. It is called from BeforeSuite so Network SP
+// specs can be skipped when the optional agent deployment is absent.
+func initNetworkSP() {
+	networkAgentBaseURL = strings.TrimRight(os.Getenv("DCM_AGENT_URL"), "/")
+	if networkAgentBaseURL == "" {
+		networkAgentBaseURL = defaultAgentURL
+	}
+
+	resp, err := unauthenticatedClient.Get(networkAgentBaseURL + "/health")
+	if err != nil {
+		GinkgoWriter.Printf("Network agent not reachable at %s: %v — Network SP tests will be skipped\n", networkAgentBaseURL, err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		GinkgoWriter.Printf("Network agent health returned %d — Network SP tests will be skipped\n", resp.StatusCode)
+		return
+	}
+
+	resp, err = unauthenticatedClient.Get(networkAgentBaseURL + "/providers")
+	if err != nil {
+		GinkgoWriter.Printf("Network agent providers endpoint is not reachable at %s: %v — Network SP tests will be skipped\n", networkAgentBaseURL, err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		GinkgoWriter.Printf("Network agent providers endpoint returned %d — Network SP tests will be skipped\n", resp.StatusCode)
+		return
+	}
+
+	var providers networkAgentProviderList
+	if err := json.NewDecoder(resp.Body).Decode(&providers); err != nil {
+		GinkgoWriter.Printf("Network agent providers response is invalid: %v — Network SP tests will be skipped\n", err)
+		return
+	}
+	for _, provider := range providers.Results {
+		if provider.ServiceType == "network" && provider.Type == "embedded" && provider.Status == "Ready" {
+			networkSPReady = true
+			GinkgoWriter.Printf("Network SP ready through agent at %s\n", networkAgentBaseURL)
+			return
+		}
+	}
+
+	GinkgoWriter.Printf("Network SP is not ready through agent at %s — Network SP tests will be skipped\n", networkAgentBaseURL)
+}
+
+func requireNetworkSP() {
+	if !networkSPReady {
+		Skip("Network SP not available (deploy the environment-agent profile with AGENT_EMBEDDED_SPS=network and publish port 8081)")
+	}
 }
 
 func waitForEmbeddedNetworkProvider() {
