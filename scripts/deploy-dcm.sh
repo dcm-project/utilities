@@ -44,7 +44,7 @@ readonly VERSION_ENV_VARS=(
     ACM_CLUSTER_SERVICE_PROVIDER_VERSION
     THREE_TIER_DEMO_SERVICE_PROVIDER_VERSION
 )
-readonly DEFAULT_AGENT_PORT="8081"  # same host port as standalone kubevirt SP (compose-kubevirt-sp.yaml); mutually exclusive
+readonly DEFAULT_AGENT_PORT="8081"  # same host port as standalone kubevirt SP (compose-kubevirt-sp.yaml); agent + kubevirt requires a distinct --agent-port
 readonly AGENT_HEALTH_ENDPOINTS=(
     "/api/v1alpha1/health"
 )
@@ -428,7 +428,7 @@ prepare_embedded_cluster_sp() {
 agent_embeds() {
     local want="$1"
     local tok
-    IFS=',' read -ra _agent_embed_toks <<< "${AGENT_EMBEDDED_SPS}"
+    IFS=',' read -r -a _agent_embed_toks <<< "${AGENT_EMBEDDED_SPS}"
     for tok in "${_agent_embed_toks[@]}"; do
         tok="${tok// /}"
         [[ "${tok}" == "${want}" ]] && return 0
@@ -542,7 +542,7 @@ verify_health() {
             local attempt_elapsed=0
             local http_code="000"
 
-            while [[ ${attempt_elapsed} -lt ${HEALTH_TIMEOUT_SECONDS} ]]; do
+            while [[ "${attempt_elapsed}" -lt "${HEALTH_TIMEOUT_SECONDS}" ]]; do
                 http_code=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" "${agent_url}${endpoint}" 2>/dev/null || echo "000")
                 if [[ "${http_code}" =~ ^2[0-9]{2}$ ]]; then
                     healthy=true
@@ -1088,6 +1088,11 @@ for i in $(seq 0 $((PROV_COUNT - 1))); do
     resolve_provider_cli "${i}"
 done
 
+# Embedded cluster SP calls oc (namespace + pull-secret) after this check.
+if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]] && agent_embeds cluster; then
+    REQUIRED_TOOLS+=(oc)
+fi
+
 check_required_tools "${REQUIRED_TOOLS[@]}" || exit 1
 info "All prerequisites found: ${REQUIRED_TOOLS[*]}"
 
@@ -1109,7 +1114,7 @@ if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]]; then
         [storage]="k8s-storage"
         [network]="k8s-network"
     )
-    IFS=',' read -ra EMBEDDED_LIST <<< "${AGENT_EMBEDDED_SPS}"
+    IFS=',' read -r -a EMBEDDED_LIST <<< "${AGENT_EMBEDDED_SPS}"
     for embedded in "${EMBEDDED_LIST[@]}"; do
         embedded="${embedded// /}"
         [[ -n "${embedded}" ]] || continue
@@ -1126,6 +1131,18 @@ if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]]; then
                 exit 1
             fi
         done
+    done
+
+    # Host port clash: agent defaults to 8081, same as compose-kubevirt-sp.yaml —
+    # reject even when 'vm' is not embedded (capability overlap is handled above).
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        [[ "${PROV_ENABLED[$i]}" == true ]] || continue
+        [[ "${PROV_LABELS[$i]}" == kubevirt* ]] || continue
+        if [[ "${AGENT_PORT}" == "${DEFAULT_AGENT_PORT}" ]]; then
+            err "Cannot combine --with-environment-agent (AGENT_PORT=${AGENT_PORT}) with standalone --${PROV_FLAGS[$i]}"
+            err "Both publish host port ${DEFAULT_AGENT_PORT}. Pass --agent-port with a different port (e.g. 18081)."
+            exit 1
+        fi
     done
 
     resolve_kubeconfig || exit 1
