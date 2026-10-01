@@ -88,7 +88,7 @@ standalone SP flags for the same capabilities.
 # Optional: override host agent port (default 8081; clashes with standalone KubeVirt)
 ./scripts/deploy-dcm.sh --with-environment-agent \
     --agent-embedded-sps container \
-    --agent-port 8081 \
+    --agent-port 9090 \
     --kubeconfig ~/.kube/config
 
 # Optional: set embedded list via env instead of --agent-embedded-sps
