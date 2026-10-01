@@ -241,7 +241,7 @@ CLI tests are skipped (not failed) if no binary is available.
 - `DCM_NATS_URL` env var overrides the NATS server (default: `nats://localhost:4222`)
 - `DCM_CLI_PATH` env var specifies the CLI binary path
 - `DCM_CONTAINER_PROVIDER_NAME` env var overrides which container provider to target in core platform tests (default: first `service_type=container` provider found)
-- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `acm-cluster`, `nats`, `cluster`, `disruptive`, `core`, `platform`, `rehydration`, `happy-path`, `failover`, `policy`, `negative`, `integrity`, `contract`) enable selective test runs via `--label-filter`
+- Ginkgo labels (`auth`, `smoke`, `cli`, `sp`, `container`, `acm-cluster`, `nats`, `cluster`, `disruptive`, `core`, `platform`, `rehydration`, `happy-path`, `failover`, `policy`, `negative`, `integrity`, `contract`) enable selective test runs via `--label-filter`
 - SP tests skip gracefully if the container SP or ACM cluster SP isn't reachable (no hard failure)
 - Cluster tests skip gracefully if `kubectl`/`oc` is unavailable or the cluster is unreachable
 - Disruptive tests skip if `podman` is unavailable; exclude from normal runs with `--label-filter '!disruptive'`

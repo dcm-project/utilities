@@ -197,6 +197,11 @@ func waitForTokenEndpoint() {
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("token endpoint discovery returned HTTP %d", resp.StatusCode)
 		}
+		if authTokens != nil && authTokens.settings.staticToken == "" {
+			if _, err := authTokens.Token(context.Background()); err != nil {
+				return fmt.Errorf("token endpoint did not issue a user token: %w", err)
+			}
+		}
 		return nil
 	}).WithTimeout(90 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 }
@@ -228,8 +233,8 @@ func waitForKeycloakAdmin(admin *keycloakAdminClient) {
 		"RHBK Admin API should become available")
 }
 
-var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, Label("auth", "security", "advanced-auth"), func() {
-	It("TC-42 survives an RHBK restart", Label("restart"), func() {
+var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("auth"), func() {
+	It("TC-42 survives an RHBK restart", Label("disruptive"), func() {
 		requireAuthTest()
 		command := os.Getenv("DCM_AUTH_RESTART_COMMAND")
 		if command == "" {
@@ -245,6 +250,10 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 		cmd.Stdout = GinkgoWriter
 		cmd.Stderr = GinkgoWriter
 		Expect(cmd.Run()).To(Succeed())
+		authTokens.mu.Lock()
+		authTokens.token = ""
+		authTokens.expiresAt = time.Time{}
+		authTokens.mu.Unlock()
 		waitForTokenEndpoint()
 		Eventually(func() int {
 			resp, err := unauthenticatedClient.Get(gatewayBaseURL + "/health")
@@ -254,10 +263,6 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 			defer resp.Body.Close()
 			return resp.StatusCode
 		}).WithTimeout(60 * time.Second).Should(Equal(http.StatusOK))
-		authTokens.mu.Lock()
-		authTokens.token = ""
-		authTokens.expiresAt = time.Time{}
-		authTokens.mu.Unlock()
 		newToken, err := authTokens.Token(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		resp = authRequest(newToken, http.MethodGet, gatewayBaseURL+"/catalog-items")
@@ -265,7 +270,7 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 	})
 
-	It("TC-43 rejects token forwarding without a valid RHDH session", Label("proxy"), func() {
+	It("TC-43 rejects token forwarding without a valid RHDH session", func() {
 		requireAuthTest()
 		proxyURL := os.Getenv("DCM_AUTH_PROXY_URL")
 		if proxyURL == "" {
@@ -302,7 +307,7 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 		resp.Body.Close()
 	})
 
-	It("TC-44 rejects invalid JWT claims", Label("negative"), func() {
+	It("TC-44 rejects invalid JWT claims", func() {
 		requireAuthTest()
 		ctx := context.Background()
 		admin, err := loadKeycloakAdminClient()
@@ -353,7 +358,7 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 		}
 	})
 
-	It("TC-45 preserves valid tokens across signing-key rotation", Label("rotation", "disruptive"), func() {
+	It("TC-45 preserves valid tokens across signing-key rotation", Label("disruptive"), func() {
 		requireAuthTest()
 		ctx := context.Background()
 		admin, err := loadKeycloakAdminClient()
@@ -361,6 +366,7 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 			Skip(err.Error())
 		}
 		waitForKeycloakAdmin(admin)
+		waitForTokenEndpoint()
 		testClient, err := admin.createPublicClient(ctx, 300)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { Expect(admin.delete(ctx, "/clients/"+testClient.ID)).To(Succeed()) })
@@ -413,7 +419,7 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 		Expect(oldResponse.StatusCode).To(Equal(http.StatusOK), "old unexpired token signed by a published key must remain valid")
 	})
 
-	It("TC-46 does not expose bearer tokens in configured logs", Label("redaction"), func() {
+	It("TC-46 does not expose bearer tokens in configured logs", func() {
 		requireAuthTest()
 		token, err := authTokens.Token(context.Background())
 		Expect(err).NotTo(HaveOccurred())

@@ -20,6 +20,8 @@ type keycloakAdminClient struct {
 	adminURL    string
 	adminToken  string
 	tokenIssuer string
+	adminUser   string
+	adminPass   string
 	username    string
 	password    string
 	client      *http.Client
@@ -50,6 +52,8 @@ func loadKeycloakAdminClient() (*keycloakAdminClient, error) {
 		adminURL:    adminURL,
 		adminToken:  adminToken,
 		tokenIssuer: strings.TrimRight(tokenIssuer, "/"),
+		adminUser:   os.Getenv("DCM_AUTH_ADMIN_USERNAME"),
+		adminPass:   os.Getenv("DCM_AUTH_ADMIN_PASSWORD"),
 		username:    authTokens.settings.username,
 		password:    authTokens.settings.password,
 		client:      unauthenticatedClient,
@@ -57,25 +61,47 @@ func loadKeycloakAdminClient() (*keycloakAdminClient, error) {
 }
 
 func (k *keycloakAdminClient) request(ctx context.Context, method, path string, payload, result interface{}) (*http.Response, error) {
-	var body io.Reader
+	var bodyBytes []byte
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
 			return nil, fmt.Errorf("encode Keycloak request: %w", err)
 		}
-		body = bytes.NewReader(data)
+		bodyBytes = data
 	}
-	request, err := http.NewRequestWithContext(ctx, method, k.adminURL+path, body)
+	doRequest := func(token string) (*http.Response, error) {
+		var body io.Reader
+		if bodyBytes != nil {
+			body = bytes.NewReader(bodyBytes)
+		}
+		request, err := http.NewRequestWithContext(ctx, method, k.adminURL+path, body)
+		if err != nil {
+			return nil, fmt.Errorf("create Keycloak request: %w", err)
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		if payload != nil {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		response, err := k.client.Do(request)
+		if err != nil {
+			return nil, fmt.Errorf("send Keycloak request: %w", err)
+		}
+		return response, nil
+	}
+	response, err := doRequest(k.adminToken)
 	if err != nil {
-		return nil, fmt.Errorf("create Keycloak request: %w", err)
+		return nil, err
 	}
-	request.Header.Set("Authorization", "Bearer "+k.adminToken)
-	if payload != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	response, err := k.client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("send Keycloak request: %w", err)
+	if response.StatusCode == http.StatusUnauthorized && k.adminUser != "" && k.adminPass != "" {
+		response.Body.Close()
+		freshToken, refreshErr := k.issueAdminToken(ctx)
+		if refreshErr == nil {
+			k.adminToken = freshToken
+			response, err = doRequest(k.adminToken)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		defer response.Body.Close()
@@ -89,6 +115,39 @@ func (k *keycloakAdminClient) request(ctx context.Context, method, path string, 
 		}
 	}
 	return response, nil
+}
+
+func (k *keycloakAdminClient) issueAdminToken(ctx context.Context) (string, error) {
+	issuerBase := k.tokenIssuer
+	if marker := strings.Index(issuerBase, "/realms/"); marker >= 0 {
+		issuerBase = issuerBase[:marker]
+	}
+	values := url.Values{
+		"grant_type": {"password"}, "client_id": {"admin-cli"},
+		"username": {k.adminUser}, "password": {k.adminPass},
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		issuerBase+"/realms/master/protocol/openid-connect/token", strings.NewReader(values.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("create Keycloak admin token request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := k.client.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("request Keycloak admin token: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Keycloak admin token request returned HTTP %d", response.StatusCode)
+	}
+	var token tokenResponse
+	if err := json.NewDecoder(response.Body).Decode(&token); err != nil {
+		return "", fmt.Errorf("decode Keycloak admin token: %w", err)
+	}
+	if token.AccessToken == "" {
+		return "", fmt.Errorf("Keycloak admin token response was empty")
+	}
+	return token.AccessToken, nil
 }
 
 func (k *keycloakAdminClient) createPublicClient(ctx context.Context, lifespan int) (keycloakClientRepresentation, error) {
