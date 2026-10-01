@@ -110,6 +110,7 @@ EOF
 
 log()  { echo "==> $*"; }
 info() { echo "    $*"; }
+warn() { echo "WARNING: $*" >&2; }
 err()  { echo "ERROR: $*" >&2; }
 
 # --- CLI binary resolution ------------------------------------------------- #
@@ -313,34 +314,49 @@ prepare_auth_test_settings() {
     fi
 
     if [[ "${AUTH_TARGET}" == rhdh ]]; then
-        command -v oc >/dev/null || { err "oc is required for --auth-target rhdh"; return 1; }
-        route_host="$(oc -n "${AUTH_NAMESPACE}" get route -o jsonpath='{.items[0].spec.host}')"
+        route_host=""
+        if command -v oc >/dev/null; then
+            route_host="$(oc -n "${AUTH_NAMESPACE}" get route -o jsonpath='{.items[0].spec.host}' 2>/dev/null || true)"
+        fi
         issuer_base="${AUTH_ISSUER_URL%/realms/*}"
         realm="${AUTH_ISSUER_URL##*/realms/}"
-        user_response="$(curl --fail --silent --show-error \
-            "${ca_args[@]}" \
-            -X POST "${AUTH_ISSUER_URL}/protocol/openid-connect/token" \
-            -d grant_type=password -d client_id="${DCM_AUTH_CLIENT_ID}" \
-            --data-urlencode client_secret="${DCM_AUTH_CLIENT_SECRET}" \
-            -d username="${DCM_AUTH_USERNAME}" -d password="${DCM_AUTH_PASSWORD}" -d scope=openid)"
-        refresh_token="$(printf '%s' "${user_response}" | jq -er .refresh_token)"
-        DCM_AUTH_PROXY_SESSION_TOKEN="$(curl --fail --silent --show-error \
-            "${ca_args[@]}" \
-            "https://${route_host}/api/auth/oidc/refresh?optional&scope=openid%20profile%20email&env=production" \
-            -H 'x-requested-with: XMLHttpRequest' \
-            --cookie "oidc-refresh-token=${refresh_token}" | jq -er .backstageIdentity.token)"
-        admin_password="$(oc -n "${RHBK_NAMESPACE:-rhbk}" get secret rhbk-admin -o jsonpath='{.data.password}' | base64 -d)"
-        admin_token="$(curl --fail --silent --show-error "${ca_args[@]}" \
-            -X POST "${issuer_base}/realms/master/protocol/openid-connect/token" \
-            -d grant_type=password -d client_id=admin-cli -d username=admin \
-            --data-urlencode password="${admin_password}" | jq -er .access_token)"
-        export DCM_AUTH_PROXY_URL="https://${route_host}/api/dcm/proxy"
+        if [[ -n "${route_host}" ]]; then
+            if user_response="$(curl --fail --silent --show-error \
+                "${ca_args[@]}" \
+                -X POST "${AUTH_ISSUER_URL}/protocol/openid-connect/token" \
+                -d grant_type=password -d client_id="${DCM_AUTH_CLIENT_ID}" \
+                --data-urlencode client_secret="${DCM_AUTH_CLIENT_SECRET}" \
+                -d username="${DCM_AUTH_USERNAME}" -d password="${DCM_AUTH_PASSWORD}" -d scope=openid)" \
+                && refresh_token="$(printf '%s' "${user_response}" | jq -er .refresh_token)" \
+                && DCM_AUTH_PROXY_SESSION_TOKEN="$(curl --fail --silent --show-error \
+                    "${ca_args[@]}" \
+                    "https://${route_host}/api/auth/oidc/refresh?optional&scope=openid%20profile%20email&env=production" \
+                    -H 'x-requested-with: XMLHttpRequest' \
+                    --cookie "oidc-refresh-token=${refresh_token}" | jq -er .backstageIdentity.token)"; then
+                export DCM_AUTH_PROXY_URL="https://${route_host}/api/dcm/proxy"
+                export DCM_AUTH_PROXY_SESSION_TOKEN
+            else
+                warn "RHDH proxy session setup failed; TC-43 and proxy checks will skip"
+            fi
+        else
+            warn "RHDH route is unavailable; TC-43 will skip"
+        fi
+        if command -v oc >/dev/null \
+            && admin_password="$(oc -n "${RHBK_NAMESPACE:-rhbk}" get secret rhbk-admin -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)" \
+            && admin_token="$(curl --fail --silent --show-error "${ca_args[@]}" \
+                -X POST "${issuer_base}/realms/master/protocol/openid-connect/token" \
+                -d grant_type=password -d client_id=admin-cli -d username=admin \
+                --data-urlencode password="${admin_password}" | jq -er .access_token)"; then
+            export DCM_AUTH_ADMIN_TOKEN="${admin_token}"
+        else
+            warn "RHBK admin token setup failed; TC-44 and TC-45 will skip"
+        fi
         export DCM_AUTH_ADMIN_URL="${issuer_base}/admin/realms/${realm}"
-        export DCM_AUTH_ADMIN_TOKEN="${admin_token}"
-        export DCM_AUTH_RESTART_COMMAND="oc -n ${RHBK_NAMESPACE:-rhbk} rollout restart statefulset/rhbk"
+        if command -v oc >/dev/null; then
+            export DCM_AUTH_RESTART_COMMAND="oc -n ${RHBK_NAMESPACE:-rhbk} rollout restart statefulset/rhbk"
+            export DCM_AUTH_RHDH_LOG_COMMAND="oc -n ${AUTH_NAMESPACE} logs -l app.kubernetes.io/name=backstage --all-containers=true"
+        fi
         export DCM_AUTH_DCM_LOG_COMMAND="podman logs dcm-e2e_control-plane_1"
-        export DCM_AUTH_RHDH_LOG_COMMAND="oc -n ${AUTH_NAMESPACE} logs -l app.kubernetes.io/name=backstage --all-containers=true"
-        export DCM_AUTH_PROXY_SESSION_TOKEN
         return 0
     fi
 
@@ -367,8 +383,11 @@ prepare_auth_test_settings() {
         return 0
     fi
 
-    err "--auth-disruptive requires --auth-target rhdh or compose"
-    return 1
+    if [[ "${AUTH_DISRUPTIVE}" == true ]]; then
+        err "--auth-disruptive requires --auth-target rhdh or compose"
+        return 1
+    fi
+    return 0
 }
 
 read_deploy_env_value() {
@@ -445,8 +464,10 @@ if [[ "${AUTH_ENABLED}" == "true" ]]; then
     fi
     if [[ "${AUTH_TARGET}" == rhdh ]]; then
         export DCM_AUTH_CLIENT_ID="${DCM_AUTH_CLIENT_ID:-rhdh-auth}"
-        DCM_AUTH_CLIENT_SECRET="$(oc -n "${AUTH_NAMESPACE}" get secret rhdh-auth-secrets -o jsonpath='{.data.KEYCLOAK_CLIENT_SECRET}' | base64 -d)"
-        export DCM_AUTH_CLIENT_SECRET
+        if [[ -z "${DCM_AUTH_CLIENT_SECRET:-}" ]]; then
+            DCM_AUTH_CLIENT_SECRET="$(oc -n "${AUTH_NAMESPACE}" get secret rhdh-auth-secrets -o jsonpath='{.data.KEYCLOAK_CLIENT_SECRET}' | base64 -d)"
+            export DCM_AUTH_CLIENT_SECRET
+        fi
         export DCM_AUTH_USERNAME="${DCM_AUTH_USERNAME:-testuser1}"
         export DCM_AUTH_PASSWORD="${DCM_AUTH_PASSWORD:-testuser1}"
     fi
@@ -614,7 +635,11 @@ if [[ "${AUTH_DISRUPTIVE}" == true ]]; then
         if [[ -n "${LABEL_FILTER}" ]]; then
             DISRUPTIVE_FILTER="(${LABEL_FILTER}) && (${DISRUPTIVE_FILTER})"
         fi
-        run_ginkgo_suite "${DISRUPTIVE_FILTER}" "${DISRUPTIVE_REPORT}" true || DISRUPTIVE_EXIT=$?
+        FAIL_ON_EMPTY=false
+        if [[ -z "${LABEL_FILTER}" ]]; then
+            FAIL_ON_EMPTY=true
+        fi
+        run_ginkgo_suite "${DISRUPTIVE_FILTER}" "${DISRUPTIVE_REPORT}" "${FAIL_ON_EMPTY}" || DISRUPTIVE_EXIT=$?
         if [[ -n "${JUNIT_REPORT}" && -f "${JUNIT_REPORT}" && -f "${DISRUPTIVE_REPORT}" ]]; then
             merge_junit_reports "${JUNIT_REPORT}" "${DISRUPTIVE_REPORT}"
             rm -f "${DISRUPTIVE_REPORT}"

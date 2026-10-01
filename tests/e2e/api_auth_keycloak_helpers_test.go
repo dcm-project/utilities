@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -280,15 +281,23 @@ func (k *keycloakAdminClient) createSigningProvider(ctx context.Context) (string
 	if err != nil {
 		return "", err
 	}
+	location := response.Header.Get("Location")
 	response.Body.Close()
+	createdID := path.Base(location)
 	components, err = k.signingComponents(ctx)
 	if err != nil {
+		if createdID != "" && createdID != "." && createdID != "/" {
+			_ = k.delete(ctx, "/components/"+createdID)
+		}
 		return "", err
 	}
 	for _, component := range components {
 		if component.Name == name {
 			return component.ID, nil
 		}
+	}
+	if createdID != "" && createdID != "." && createdID != "/" {
+		_ = k.delete(ctx, "/components/"+createdID)
 	}
 	return "", fmt.Errorf("temporary signing provider %q was not found", name)
 }

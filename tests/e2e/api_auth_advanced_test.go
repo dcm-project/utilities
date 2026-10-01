@@ -174,11 +174,15 @@ func expectRejected(name, token string) {
 	Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized), name)
 }
 
-func expectRedactedLogs(source, command, token string) {
+func expectRedactedLogs(source, command string, tokens ...string) {
 	output, err := exec.Command("sh", "-c", command).CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), source)
 	Expect(strings.TrimSpace(string(output))).NotTo(BeEmpty(), "%s log source was empty", source)
-	Expect(string(output)).NotTo(ContainSubstring(token), source)
+	for _, token := range tokens {
+		if token != "" {
+			Expect(string(output)).NotTo(ContainSubstring(token), source)
+		}
+	}
 	Expect(string(output)).NotTo(MatchRegexp(`[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}`), source)
 	Expect(string(output)).NotTo(MatchRegexp(`(?i)Bearer[[:space:]]+[A-Za-z0-9._~-]{20,}`), source)
 }
@@ -234,8 +238,11 @@ func waitForKeycloakAdmin(admin *keycloakAdminClient) {
 }
 
 var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("auth"), func() {
-	It("TC-42 survives an RHBK restart", Label("disruptive"), func() {
+	BeforeAll(func() {
 		requireAuthTest()
+	})
+
+	It("TC-42 survives an RHBK restart", Label("disruptive"), func() {
 		command := os.Getenv("DCM_AUTH_RESTART_COMMAND")
 		if command == "" {
 			Skip("set DCM_AUTH_RESTART_COMMAND for the target deployment")
@@ -271,7 +278,6 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 	})
 
 	It("TC-43 rejects token forwarding without a valid RHDH session", func() {
-		requireAuthTest()
 		proxyURL := os.Getenv("DCM_AUTH_PROXY_URL")
 		if proxyURL == "" {
 			Skip("set DCM_AUTH_PROXY_URL for the RHDH proxy")
@@ -308,7 +314,6 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 	})
 
 	It("TC-44 rejects invalid JWT claims", func() {
-		requireAuthTest()
 		ctx := context.Background()
 		admin, err := loadKeycloakAdminClient()
 		if err != nil {
@@ -359,7 +364,6 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 	})
 
 	It("TC-45 preserves valid tokens across signing-key rotation", Label("disruptive"), func() {
-		requireAuthTest()
 		ctx := context.Background()
 		admin, err := loadKeycloakAdminClient()
 		if err != nil {
@@ -420,7 +424,6 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 	})
 
 	It("TC-46 does not expose bearer tokens in configured logs", func() {
-		requireAuthTest()
 		token, err := authTokens.Token(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		resp := authRequest(token, http.MethodGet, gatewayBaseURL+"/catalog-items")
@@ -429,6 +432,7 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 
 		proxyURL := os.Getenv("DCM_AUTH_PROXY_URL")
 		sessionToken := os.Getenv("DCM_AUTH_PROXY_SESSION_TOKEN")
+		redactionTokens := []string{token}
 		if proxyURL != "" && sessionToken != "" {
 			request, requestErr := http.NewRequest(http.MethodGet, strings.TrimRight(proxyURL, "/")+"/catalog-items", nil)
 			Expect(requestErr).NotTo(HaveOccurred())
@@ -439,6 +443,7 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 			Expect(resp.StatusCode).To(BeNumerically(">=", http.StatusOK))
 			Expect(resp.StatusCode).To(BeNumerically("<", http.StatusMultipleChoices))
 			resp.Body.Close()
+			redactionTokens = append(redactionTokens, sessionToken)
 		}
 		logCommands := map[string]string{
 			"DCM":  os.Getenv("DCM_AUTH_DCM_LOG_COMMAND"),
@@ -449,7 +454,7 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 			if command == "" {
 				continue
 			}
-			expectRedactedLogs(source, command, token)
+			expectRedactedLogs(source, command, redactionTokens...)
 			checked++
 		}
 		if checked > 0 {
@@ -463,7 +468,11 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 			data, err := os.ReadFile(filename)
 			Expect(err).NotTo(HaveOccurred(), filename)
 			Expect(strings.TrimSpace(string(data))).NotTo(BeEmpty(), filename)
-			Expect(string(data)).NotTo(ContainSubstring(token), filename)
+			for _, sensitiveToken := range redactionTokens {
+				if sensitiveToken != "" {
+					Expect(string(data)).NotTo(ContainSubstring(sensitiveToken), filename)
+				}
+			}
 			Expect(string(data)).NotTo(MatchRegexp(`[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}`), filename)
 		}
 	})
