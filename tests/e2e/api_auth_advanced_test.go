@@ -201,6 +201,33 @@ func waitForTokenEndpoint() {
 	}).WithTimeout(90 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
 }
 
+func waitForRHDHProxy(proxyURL string) {
+	Eventually(func() error {
+		request, err := http.NewRequest(http.MethodGet, strings.TrimRight(proxyURL, "/")+"/catalog-items", nil)
+		if err != nil {
+			return err
+		}
+		response, err := unauthenticatedClient.Do(request)
+		if err != nil {
+			return err
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusUnauthorized {
+			return fmt.Errorf("RHDH proxy returned HTTP %d; expected 401 while checking readiness", response.StatusCode)
+		}
+		return nil
+	}).WithTimeout(90*time.Second).WithPolling(2*time.Second).Should(Succeed(),
+		"RHDH proxy should become available")
+}
+
+func waitForKeycloakAdmin(admin *keycloakAdminClient) {
+	Eventually(func() error {
+		_, err := admin.realmID(context.Background())
+		return err
+	}).WithTimeout(90*time.Second).WithPolling(2*time.Second).Should(Succeed(),
+		"RHBK Admin API should become available")
+}
+
 var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, Label("auth", "security", "advanced-auth"), func() {
 	It("TC-42 survives an RHBK restart", Label("restart"), func() {
 		requireAuthTest()
@@ -244,6 +271,7 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 		if proxyURL == "" {
 			Skip("set DCM_AUTH_PROXY_URL for the RHDH proxy")
 		}
+		waitForRHDHProxy(proxyURL)
 		token, err := authTokens.Token(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		request, err := http.NewRequest(http.MethodGet, strings.TrimRight(proxyURL, "/")+"/catalog-items", nil)
@@ -281,6 +309,7 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 		if err != nil {
 			Skip(err.Error())
 		}
+		waitForKeycloakAdmin(admin)
 		testClient, err := admin.createPublicClient(ctx, 1)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { Expect(admin.delete(ctx, "/clients/"+testClient.ID)).To(Succeed()) })
@@ -331,6 +360,7 @@ var _ = Describe("DCM authentication advanced E2E", Ordered, ContinueOnFailure, 
 		if err != nil {
 			Skip(err.Error())
 		}
+		waitForKeycloakAdmin(admin)
 		testClient, err := admin.createPublicClient(ctx, 300)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { Expect(admin.delete(ctx, "/clients/"+testClient.ID)).To(Succeed()) })
