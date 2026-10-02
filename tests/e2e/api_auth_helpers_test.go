@@ -190,7 +190,8 @@ func (p *authTokenProvider) Token(ctx context.Context) (string, error) {
 		ClientSecret: p.settings.clientSecret,
 		Scopes:       []string{"openid"},
 		Endpoint: oauth2.Endpoint{
-			TokenURL: tokenIssuerURL + "/protocol/openid-connect/token",
+			TokenURL:  tokenIssuerURL + "/protocol/openid-connect/token",
+			AuthStyle: oauth2.AuthStyleInParams,
 		},
 	}
 	tokenContext := context.WithValue(ctx, oauth2.HTTPClient, p.client)

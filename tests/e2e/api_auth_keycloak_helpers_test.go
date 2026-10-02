@@ -144,7 +144,8 @@ func (k *keycloakAdminClient) issuePasswordToken(ctx context.Context, tokenURL, 
 		ClientSecret: clientSecret,
 		Scopes:       []string{"openid"},
 		Endpoint: oauth2.Endpoint{
-			TokenURL: tokenURL,
+			TokenURL:  tokenURL,
+			AuthStyle: oauth2.AuthStyleInParams,
 		},
 	}
 	tokenContext := context.WithValue(ctx, oauth2.HTTPClient, k.client)
