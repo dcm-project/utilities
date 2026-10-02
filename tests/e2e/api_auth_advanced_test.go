@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -33,29 +34,33 @@ func authRequest(token, method, endpoint string) *http.Response {
 }
 
 func tokenClaims(token string) (map[string]interface{}, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("token is not a JWT")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	parsed, err := parseUnverifiedJWT(token)
 	if err != nil {
 		return nil, err
 	}
-	claims := map[string]interface{}{}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return nil, err
+	claims, ok := parsed.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("JWT claims are not a map")
 	}
-	return claims, nil
+	return map[string]interface{}(claims), nil
 }
 
 func tokenWithClaims(token string, mutate func(map[string]interface{})) string {
-	parts := strings.Split(token, ".")
 	claims, err := tokenClaims(token)
 	Expect(err).NotTo(HaveOccurred())
 	mutate(claims)
+	parts := strings.Split(token, ".")
 	payload, err := json.Marshal(claims)
 	Expect(err).NotTo(HaveOccurred())
 	return parts[0] + "." + base64.RawURLEncoding.EncodeToString(payload) + "." + parts[2]
+}
+
+func parseUnverifiedJWT(token string) (*jwt.Token, error) {
+	parsed, _, err := new(jwt.Parser).ParseUnverified(token, jwt.MapClaims{})
+	if err != nil {
+		return nil, fmt.Errorf("parse JWT: %w", err)
+	}
+	return parsed, nil
 }
 
 func tokenStringClaim(token, name string) (string, error) {
@@ -83,19 +88,11 @@ func tokenExpiry(token string) (time.Time, error) {
 }
 
 func tokenKeyID(token string) (string, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return "", fmt.Errorf("token is not a JWT")
-	}
-	header, err := base64.RawURLEncoding.DecodeString(parts[0])
+	parsed, err := parseUnverifiedJWT(token)
 	if err != nil {
-		return "", fmt.Errorf("decode JWT header: %w", err)
+		return "", err
 	}
-	var values map[string]interface{}
-	if err := json.Unmarshal(header, &values); err != nil {
-		return "", fmt.Errorf("decode JWT header JSON: %w", err)
-	}
-	keyID, ok := values["kid"].(string)
+	keyID, ok := parsed.Header["kid"].(string)
 	if !ok || keyID == "" {
 		return "", fmt.Errorf("JWT kid header is missing")
 	}
@@ -282,6 +279,10 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 		if proxyURL == "" {
 			Skip("set DCM_AUTH_PROXY_URL for the RHDH proxy")
 		}
+		sessionToken := os.Getenv("DCM_AUTH_PROXY_SESSION_TOKEN")
+		if sessionToken == "" {
+			Skip("set DCM_AUTH_PROXY_SESSION_TOKEN for the valid RHDH session check")
+		}
 		waitForRHDHProxy(proxyURL)
 		token, err := authTokens.Token(context.Background())
 		Expect(err).NotTo(HaveOccurred())
@@ -298,69 +299,72 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized))
 		resp.Body.Close()
-		sessionToken := os.Getenv("DCM_AUTH_PROXY_SESSION_TOKEN")
-		if sessionToken == "" {
-			Skip("set DCM_AUTH_PROXY_SESSION_TOKEN for the valid RHDH session check")
-		}
 		request, err = http.NewRequest(http.MethodGet, strings.TrimRight(proxyURL, "/")+"/catalog-items", nil)
 		Expect(err).NotTo(HaveOccurred())
 		request.Header.Set("Authorization", "Bearer "+sessionToken)
 		request.Header.Set("X-DCM-OIDC-Token", token)
 		resp, err = unauthenticatedClient.Do(request)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(BeNumerically(">=", http.StatusOK))
-		Expect(resp.StatusCode).To(BeNumerically("<", http.StatusMultipleChoices))
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		resp.Body.Close()
 	})
 
-	It("TC-44 rejects invalid JWT claims", func() {
-		ctx := context.Background()
-		admin, err := loadKeycloakAdminClient()
-		if err != nil {
-			Skip(err.Error())
-		}
-		waitForKeycloakAdmin(admin)
-		testClient, err := admin.createPublicClient(ctx, 1)
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(admin.delete(ctx, "/clients/"+testClient.ID)).To(Succeed()) })
+	Context("TC-44 rejects invalid JWT claims", func() {
+		var tokens map[string]string
 
-		wrongAudience, err := admin.issueUserToken(ctx, testClient.ClientID)
-		Expect(err).NotTo(HaveOccurred())
-		expectedAudience := os.Getenv("DCM_AUTH_AUDIENCE")
-		if expectedAudience == "" {
-			expectedAudience = "dcm-api"
-		}
-		hasAudience, err := tokenHasAudience(wrongAudience, expectedAudience)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(hasAudience).To(BeFalse(), "wrong-audience token unexpectedly contains %q", expectedAudience)
+		BeforeAll(func() {
+			ctx := context.Background()
+			admin, err := loadKeycloakAdminClient()
+			if err != nil {
+				Skip(err.Error())
+			}
+			waitForKeycloakAdmin(admin)
+			testClient, err := admin.createPublicClient(ctx, 1)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { Expect(admin.delete(ctx, "/clients/"+testClient.ID)).To(Succeed()) })
 
-		Expect(admin.addAudienceMapper(ctx, testClient.ID, expectedAudience)).To(Succeed())
-		expired, err := admin.issueUserToken(ctx, testClient.ClientID)
-		Expect(err).NotTo(HaveOccurred())
-		expiry, err := tokenExpiry(expired)
-		Expect(err).NotTo(HaveOccurred())
-		Eventually(func() bool { return time.Now().After(expiry.Add(time.Second)) }).WithTimeout(10 * time.Second).Should(BeTrue())
+			wrongAudience, err := admin.issueUserToken(ctx, testClient.ClientID)
+			Expect(err).NotTo(HaveOccurred())
+			expectedAudience := os.Getenv("DCM_AUTH_AUDIENCE")
+			if expectedAudience == "" {
+				expectedAudience = "dcm-api"
+			}
+			hasAudience, err := tokenHasAudience(wrongAudience, expectedAudience)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hasAudience).To(BeFalse(), "wrong-audience token unexpectedly contains %q", expectedAudience)
 
-		valid, err := authTokens.Token(context.Background())
-		Expect(err).NotTo(HaveOccurred())
-		foreignIssuer := admin.adminToken
-		issuer, err := tokenStringClaim(foreignIssuer, "iss")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(issuer).NotTo(Equal(authTokens.settings.issuerURL))
+			Expect(admin.addAudienceMapper(ctx, testClient.ID, expectedAudience)).To(Succeed())
+			expired, err := admin.issueUserToken(ctx, testClient.ClientID)
+			Expect(err).NotTo(HaveOccurred())
+			expiry, err := tokenExpiry(expired)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func() bool { return time.Now().After(expiry.Add(time.Second)) }).WithTimeout(10 * time.Second).Should(BeTrue())
 
-		cases := []struct {
-			name  string
-			token string
-		}{
-			{name: "malformed", token: "not-a-jwt"},
-			{name: "invalid signature", token: tokenWithClaims(valid, func(c map[string]interface{}) { c["sub"] = "tampered" })},
-			{name: "expired", token: expired},
-			{name: "foreign issuer", token: foreignIssuer},
-			{name: "wrong audience", token: wrongAudience},
-		}
-		for _, testCase := range cases {
-			expectRejected(testCase.name, testCase.token)
-		}
+			valid, err := authTokens.Token(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			foreignIssuer := admin.adminToken
+			issuer, err := tokenStringClaim(foreignIssuer, "iss")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(issuer).NotTo(Equal(authTokens.settings.issuerURL))
+
+			tokens = map[string]string{
+				"malformed":         "not-a-jwt",
+				"invalid signature": tokenWithClaims(valid, func(c map[string]interface{}) { c["sub"] = "tampered" }),
+				"expired":           expired,
+				"foreign issuer":    foreignIssuer,
+				"wrong audience":    wrongAudience,
+			}
+		})
+
+		DescribeTable("rejects the token", func(name string) {
+			expectRejected(name, tokens[name])
+		},
+			Entry("malformed", "malformed"),
+			Entry("invalid signature", "invalid signature"),
+			Entry("expired", "expired"),
+			Entry("foreign issuer", "foreign issuer"),
+			Entry("wrong audience", "wrong audience"),
+		)
 	})
 
 	It("TC-45 preserves valid tokens across signing-key rotation", Label("disruptive"), func() {
@@ -440,8 +444,7 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 			request.Header.Set("X-DCM-OIDC-Token", token)
 			resp, requestErr = unauthenticatedClient.Do(request)
 			Expect(requestErr).NotTo(HaveOccurred())
-			Expect(resp.StatusCode).To(BeNumerically(">=", http.StatusOK))
-			Expect(resp.StatusCode).To(BeNumerically("<", http.StatusMultipleChoices))
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
 			resp.Body.Close()
 			redactionTokens = append(redactionTokens, sessionToken)
 		}
@@ -457,23 +460,23 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 			expectRedactedLogs(source, command, redactionTokens...)
 			checked++
 		}
-		if checked > 0 {
-			return
-		}
-		files := strings.Split(os.Getenv("DCM_AUTH_LOG_FILES"), ":")
-		if len(files) == 0 || files[0] == "" {
-			Skip("set DCM_AUTH_DCM_LOG_COMMAND, DCM_AUTH_RHDH_LOG_COMMAND, or DCM_AUTH_LOG_FILES")
-		}
-		for _, filename := range files {
-			data, err := os.ReadFile(filename)
-			Expect(err).NotTo(HaveOccurred(), filename)
-			Expect(strings.TrimSpace(string(data))).NotTo(BeEmpty(), filename)
-			for _, sensitiveToken := range redactionTokens {
-				if sensitiveToken != "" {
-					Expect(string(data)).NotTo(ContainSubstring(sensitiveToken), filename)
-				}
+		if checked == 0 {
+			files := strings.Split(os.Getenv("DCM_AUTH_LOG_FILES"), ":")
+			if len(files) == 0 || files[0] == "" {
+				Skip("set DCM_AUTH_DCM_LOG_COMMAND, DCM_AUTH_RHDH_LOG_COMMAND, or DCM_AUTH_LOG_FILES")
 			}
-			Expect(string(data)).NotTo(MatchRegexp(`[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}`), filename)
+			for _, filename := range files {
+				data, err := os.ReadFile(filename)
+				Expect(err).NotTo(HaveOccurred(), filename)
+				Expect(strings.TrimSpace(string(data))).NotTo(BeEmpty(), filename)
+				for _, sensitiveToken := range redactionTokens {
+					if sensitiveToken != "" {
+						Expect(string(data)).NotTo(ContainSubstring(sensitiveToken), filename)
+					}
+				}
+				Expect(string(data)).NotTo(MatchRegexp(`[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}`), filename)
+				Expect(string(data)).NotTo(MatchRegexp(`(?i)Bearer[[:space:]]+[A-Za-z0-9._~-]{20,}`), filename)
+			}
 		}
 	})
 })

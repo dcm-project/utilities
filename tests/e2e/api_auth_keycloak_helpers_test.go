@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 type keycloakAdminClient struct {
@@ -45,16 +47,24 @@ func loadKeycloakAdminClient() (*keycloakAdminClient, error) {
 	if adminURL == "" || adminToken == "" {
 		return nil, fmt.Errorf("DCM_AUTH_ADMIN_URL and DCM_AUTH_ADMIN_TOKEN are required")
 	}
+	adminUser := os.Getenv("DCM_AUTH_ADMIN_USERNAME")
+	adminPass := os.Getenv("DCM_AUTH_ADMIN_PASSWORD")
+	if (adminUser == "") != (adminPass == "") {
+		return nil, fmt.Errorf("DCM_AUTH_ADMIN_USERNAME and DCM_AUTH_ADMIN_PASSWORD must be provided together")
+	}
 	tokenIssuer := authTokens.settings.tokenIssuerURL
 	if tokenIssuer == "" {
 		tokenIssuer = authTokens.settings.issuerURL
+	}
+	if tokenIssuer == "" || authTokens.settings.username == "" || authTokens.settings.password == "" {
+		return nil, fmt.Errorf("auth token issuer, username, and password are required for Keycloak E2E helpers")
 	}
 	return &keycloakAdminClient{
 		adminURL:    adminURL,
 		adminToken:  adminToken,
 		tokenIssuer: strings.TrimRight(tokenIssuer, "/"),
-		adminUser:   os.Getenv("DCM_AUTH_ADMIN_USERNAME"),
-		adminPass:   os.Getenv("DCM_AUTH_ADMIN_PASSWORD"),
+		adminUser:   adminUser,
+		adminPass:   adminPass,
 		username:    authTokens.settings.username,
 		password:    authTokens.settings.password,
 		client:      unauthenticatedClient,
@@ -123,30 +133,27 @@ func (k *keycloakAdminClient) issueAdminToken(ctx context.Context) (string, erro
 	if marker := strings.Index(issuerBase, "/realms/"); marker >= 0 {
 		issuerBase = issuerBase[:marker]
 	}
-	values := url.Values{
-		"grant_type": {"password"}, "client_id": {"admin-cli"},
-		"username": {k.adminUser}, "password": {k.adminPass},
+	return k.issuePasswordToken(ctx,
+		issuerBase+"/realms/master/protocol/openid-connect/token",
+		"admin-cli", "", k.adminUser, k.adminPass)
+}
+
+func (k *keycloakAdminClient) issuePasswordToken(ctx context.Context, tokenURL, clientID, clientSecret, username, password string) (string, error) {
+	config := oauth2.Config{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		Scopes:       []string{"openid"},
+		Endpoint: oauth2.Endpoint{
+			TokenURL: tokenURL,
+		},
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		issuerBase+"/realms/master/protocol/openid-connect/token", strings.NewReader(values.Encode()))
+	tokenContext := context.WithValue(ctx, oauth2.HTTPClient, k.client)
+	token, err := config.PasswordCredentialsToken(tokenContext, username, password)
 	if err != nil {
-		return "", fmt.Errorf("create Keycloak admin token request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := k.client.Do(request)
-	if err != nil {
-		return "", fmt.Errorf("request Keycloak admin token: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Keycloak admin token request returned HTTP %d", response.StatusCode)
-	}
-	var token tokenResponse
-	if err := json.NewDecoder(response.Body).Decode(&token); err != nil {
-		return "", fmt.Errorf("decode Keycloak admin token: %w", err)
+		return "", fmt.Errorf("request Keycloak token: %w", err)
 	}
 	if token.AccessToken == "" {
-		return "", fmt.Errorf("Keycloak admin token response was empty")
+		return "", fmt.Errorf("Keycloak token response was empty")
 	}
 	return token.AccessToken, nil
 }
@@ -192,28 +199,9 @@ func (k *keycloakAdminClient) addAudienceMapper(ctx context.Context, clientID, a
 }
 
 func (k *keycloakAdminClient) issueUserToken(ctx context.Context, clientID string) (string, error) {
-	values := url.Values{
-		"grant_type": {"password"}, "client_id": {clientID},
-		"username": {k.username}, "password": {k.password}, "scope": {"openid"},
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, k.tokenIssuer+"/protocol/openid-connect/token", strings.NewReader(values.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("create temporary-client token request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := k.client.Do(request)
-	if err != nil {
-		return "", fmt.Errorf("request temporary-client token: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("temporary-client token request returned HTTP %d", response.StatusCode)
-	}
-	var token tokenResponse
-	if err := json.NewDecoder(response.Body).Decode(&token); err != nil {
-		return "", fmt.Errorf("decode temporary-client token: %w", err)
-	}
-	return token.AccessToken, nil
+	return k.issuePasswordToken(ctx,
+		k.tokenIssuer+"/protocol/openid-connect/token",
+		clientID, "", k.username, k.password)
 }
 
 func (k *keycloakAdminClient) delete(ctx context.Context, path string) error {

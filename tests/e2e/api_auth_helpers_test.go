@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -32,11 +33,6 @@ type authSettings struct {
 	password       string
 	staticToken    string
 	caFile         string
-}
-
-type tokenResponse struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
 }
 
 type authTokenProvider struct {
@@ -185,46 +181,33 @@ func (p *authTokenProvider) Token(ctx context.Context) (string, error) {
 	}
 	p.mu.Unlock()
 
-	values := url.Values{
-		"grant_type":    {"password"},
-		"client_id":     {p.settings.clientID},
-		"client_secret": {p.settings.clientSecret},
-		"username":      {p.settings.username},
-		"password":      {p.settings.password},
-		"scope":         {"openid"},
-	}
 	tokenIssuerURL := p.settings.tokenIssuerURL
 	if tokenIssuerURL == "" {
 		tokenIssuerURL = p.settings.issuerURL
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		tokenIssuerURL+"/protocol/openid-connect/token", strings.NewReader(values.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("create auth token request: %w", err)
+	config := oauth2.Config{
+		ClientID:     p.settings.clientID,
+		ClientSecret: p.settings.clientSecret,
+		Scopes:       []string{"openid"},
+		Endpoint: oauth2.Endpoint{
+			TokenURL: tokenIssuerURL + "/protocol/openid-connect/token",
+		},
 	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := p.client.Do(request)
+	tokenContext := context.WithValue(ctx, oauth2.HTTPClient, p.client)
+	token, err := config.PasswordCredentialsToken(tokenContext, p.settings.username, p.settings.password)
 	if err != nil {
 		return "", fmt.Errorf("request auth token: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", fmt.Errorf("auth token endpoint returned HTTP %d", response.StatusCode)
-	}
-	var token tokenResponse
-	if err := json.NewDecoder(response.Body).Decode(&token); err != nil {
-		return "", fmt.Errorf("decode auth token response: %w", err)
 	}
 	if token.AccessToken == "" {
 		return "", fmt.Errorf("auth token response did not contain access_token")
 	}
-	expiresIn := time.Duration(token.ExpiresIn) * time.Second
-	if expiresIn <= 0 {
-		expiresIn = time.Minute
+	expiresAt := token.Expiry
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().Add(time.Minute)
 	}
 	p.mu.Lock()
 	p.token = token.AccessToken
-	p.expiresAt = time.Now().Add(expiresIn)
+	p.expiresAt = expiresAt
 	p.mu.Unlock()
 	return token.AccessToken, nil
 }
