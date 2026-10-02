@@ -34,6 +34,8 @@ func authRequest(token, method, endpoint string) *http.Response {
 }
 
 func tokenClaims(token string) (map[string]interface{}, error) {
+	// These tests inspect claims from tokens issued by the configured identity
+	// provider; the DCM API remains responsible for signature and claim validation.
 	parsed, err := parseUnverifiedJWT(token)
 	if err != nil {
 		return nil, err
@@ -401,13 +403,14 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 		DeferCleanup(func() { Expect(admin.delete(ctx, "/components/"+componentID)).To(Succeed()) })
 
 		var newToken string
+		var newKeyID string
 		Eventually(func() bool {
 			candidate, issueErr := admin.issueUserToken(ctx, testClient.ClientID)
 			if issueErr != nil {
 				return false
 			}
-			newKeyID, keyErr := tokenKeyID(candidate)
-			if keyErr != nil || newKeyID == oldKeyID {
+			candidateKeyID, keyErr := tokenKeyID(candidate)
+			if keyErr != nil || candidateKeyID == oldKeyID {
 				return false
 			}
 			response := authRequest(candidate, http.MethodGet, gatewayBaseURL+"/catalog-items")
@@ -416,6 +419,7 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 				return false
 			}
 			newToken = candidate
+			newKeyID = candidateKeyID
 			return true
 		}).WithTimeout(60 * time.Second).WithPolling(2 * time.Second).Should(BeTrue())
 		Expect(newToken).NotTo(BeEmpty())
@@ -423,6 +427,7 @@ var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("au
 		keyIDs, err := publishedKeyIDs()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(keyIDs).To(ContainElement(oldKeyID), "old signing key must remain published during overlap")
+		Expect(keyIDs).To(ContainElement(newKeyID), "new signing key must be published after rotation")
 		Expect(time.Now()).To(BeTemporally("<", oldExpiry), "old token expired before overlap validation")
 		oldResponse = authRequest(oldToken, http.MethodGet, gatewayBaseURL+"/catalog-items")
 		defer oldResponse.Body.Close()
