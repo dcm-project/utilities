@@ -256,7 +256,13 @@ DCM_AUTH_CLIENT_SECRET="$RHBK_CLIENT_SECRET" \
 DCM_AUTH_USERNAME=testuser1 \
 DCM_AUTH_PASSWORD="$RHBK_TEST_PASSWORD" \
 ./tests/run-e2e.sh --skip-deploy --skip-cli \
-  --auth-issuer-url https://keycloak.example/realms/dcm
+  --auth-target compose
+
+# Authentication-enabled mode with RHDH/RHBK discovery and disruptive checks
+./tests/run-e2e.sh --skip-deploy --skip-cli \
+  --auth-target rhdh --auth-disruptive
+
+# --auth-issuer-url is an optional override when target discovery is unavailable.
 
 # ACM cluster SP tests
 ./tests/run-e2e.sh --acm-cluster-service-provider --kubeconfig ~/.kube/config
