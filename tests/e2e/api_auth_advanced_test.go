@@ -228,10 +228,12 @@ func waitForRHDHProxy(proxyURL string) {
 
 func waitForKeycloakAdmin(admin *keycloakAdminClient) {
 	Eventually(func() error {
-		_, err := admin.realmID(context.Background())
-		return err
+		if _, err := admin.realmID(context.Background()); err != nil {
+			return err
+		}
+		return admin.listClients(context.Background())
 	}).WithTimeout(90*time.Second).WithPolling(2*time.Second).Should(Succeed(),
-		"RHBK Admin API should become available")
+		"RHBK Admin API and client endpoint should become available")
 }
 
 var _ = Describe("DCM authentication E2E", Ordered, ContinueOnFailure, Label("auth"), func() {

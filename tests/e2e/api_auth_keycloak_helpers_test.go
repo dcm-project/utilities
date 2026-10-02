@@ -227,6 +227,12 @@ func (k *keycloakAdminClient) realmID(ctx context.Context) (string, error) {
 	return realm.ID, nil
 }
 
+func (k *keycloakAdminClient) listClients(ctx context.Context) error {
+	var clients []keycloakClientRepresentation
+	_, err := k.request(ctx, http.MethodGet, "/clients?max=1", nil, &clients)
+	return err
+}
+
 func (k *keycloakAdminClient) signingComponents(ctx context.Context) ([]keycloakComponent, error) {
 	var components []keycloakComponent
 	_, err := k.request(ctx, http.MethodGet, "/components?type=org.keycloak.keys.KeyProvider", nil, &components)
