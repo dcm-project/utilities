@@ -229,7 +229,7 @@ tear_down() {
     # APIService backend disappears but the APIService object remains, causing
     # the namespace to hang in Terminating (NamespaceDeletionDiscoveryFailure).
     # Delete it first so the namespace termination completes cleanly.
-    if oc get apiservice v1alpha1.console.osac.openshift.io &>/dev/null; then
+    if phase2_owned apiservice v1alpha1.console.osac.openshift.io; then
         log "Removing console.osac.openshift.io APIService (prevents namespace hang)"
         oc delete apiservice v1alpha1.console.osac.openshift.io --ignore-not-found
     fi
@@ -244,17 +244,23 @@ tear_down() {
             2>/dev/null || true
     done
 
-    if oc get namespace "${NS}" &>/dev/null; then
+    if phase2_owned namespace "${NS}"; then
         oc delete namespace "${NS}" --wait=true
         info "Namespace ${NS} deleted"
+    elif oc get namespace "${NS}" &>/dev/null; then
+        info "Namespace ${NS} is not owned by this deployment — leaving it in place"
     else
         info "Namespace ${NS} not found — nothing to delete"
     fi
 
     # Remove cluster-scoped resources owned by this backend (Phase 1).
     log "Removing cluster-scoped resources"
-    oc delete clusterissuer osac-ca --ignore-not-found
-    info "ClusterIssuer osac-ca removed"
+    if phase2_owned clusterissuer osac-ca; then
+        oc delete clusterissuer osac-ca --ignore-not-found
+        info "Owned ClusterIssuer osac-ca removed"
+    else
+        info "ClusterIssuer osac-ca is not owned by this deployment — leaving it in place"
+    fi
 
     # Remove BareMetalHost fixtures from `default` only if they carry our label.
     log "Removing owned BareMetalHost fixtures from namespace 'default'"
@@ -485,6 +491,7 @@ deploy() {
     # Create namespace
     if ! oc get namespace "${NS}" &>/dev/null; then
         oc create namespace "${NS}"
+        oc label namespace "${NS}" "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}"
         info "Namespace ${NS} created"
     else
         info "Namespace ${NS} already exists"
@@ -498,6 +505,8 @@ deploy() {
     # Apply CA cert chain (cluster-scoped ClusterIssuer + cert-manager-namespaced Issuer/Certificate)
     log "Applying cert-manager CA chain"
     oc apply -f "${MANIFESTS_DIR}/cert-manager-ca.yaml"
+    oc label clusterissuer osac-ca "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite
+    oc label apiservice v1alpha1.console.osac.openshift.io "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite 2>/dev/null || true
     # Wait for the CA secret to be produced in cert-manager namespace
     extract_ca_cert
 
@@ -643,8 +652,11 @@ EOF
         exit 1
     fi
 
-    local rendered_file="/tmp/ffs-rendered.yaml"
-    local filtered_file="/tmp/ffs-rendered-filtered.yaml"
+    local render_tmp
+    render_tmp="$(mktemp -d)"
+    trap 'rm -rf "${render_tmp}"' RETURN
+    local rendered_file="${render_tmp}/ffs-rendered.yaml"
+    local filtered_file="${render_tmp}/ffs-rendered-filtered.yaml"
 
     helm template ffs-fulfillment-service \
         oci://ghcr.io/osac-project/charts/fulfillment-service \
@@ -868,7 +880,10 @@ deploy_phase2() {
     # --- Hub-access RBAC gap-fill --------------------------------------------
     log "Applying hub-access RBAC for osac-operator"
     fetch_upstream "hub-access-hosted-clusters-rbac.yaml" "${tmp_dir}"
-    oc apply -n "${NS}" -f "${tmp_dir}/hub-access-hosted-clusters-rbac.yaml"
+    sed "s/namespace: default/namespace: ${NS}/g" \
+        "${tmp_dir}/hub-access-hosted-clusters-rbac.yaml" \
+        > "${tmp_dir}/hub-access-hosted-clusters-rbac-rendered.yaml"
+    oc apply -f "${tmp_dir}/hub-access-hosted-clusters-rbac-rendered.yaml"
 
     # --- BMFO Helm chart -----------------------------------------------------
     log "Installing bare-metal-fulfillment-operator (chart version: ${BMFO_CHART_VERSION})"
@@ -1042,9 +1057,9 @@ _register_fixtures_body() {
         # Anything else is a hard failure.
         local label="$1" service="$2" method="$3" body="$4"
         local result rc=0
-        result="$(grpcurl -insecure \
+        result="$(printf '%s' "${body}" | grpcurl -insecure \
             -H "Authorization: Bearer ${token}" \
-            -d "${body}" \
+            -d @ \
             "127.0.0.1:${internal_api_port}" \
             "${service}/${method}" 2>&1)" || rc=$?
         if [[ "${rc}" -eq 0 ]] && echo "${result}" | grep -q '"id"'; then
