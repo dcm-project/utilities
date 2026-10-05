@@ -24,8 +24,8 @@ spec:
           # Published from dcm-project/osac-service-provider Containerfile.osac-aap-mock.
           # Upstream CI builds this locally and loads into kind; we push to Quay so it
           # is pullable on OCP without a local build step.
-          image: quay.io/dcm-project/osac-aap-mock:tierb
-          imagePullPolicy: Always
+          image: quay.io/dcm-project/osac-aap-mock@sha256:1aadbb5fa5c03eadeac31eae3b79adca5147f9c8925af3cd96a30caf6ff74f92
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 9093
