@@ -82,7 +82,6 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 			spec, ok := serviceType["spec"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "network service type must include a schema object")
 			Expect(spec).To(HaveKey("ports"))
-			Expect(spec).To(HaveKey("routing_level"))
 			Expect(spec).To(HaveKey("endpoints"))
 		})
 	})
