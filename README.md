@@ -262,6 +262,8 @@ DCM_AUTH_PASSWORD="$RHBK_TEST_PASSWORD" \
 ./tests/run-e2e.sh --skip-deploy --skip-cli \
   --auth-target rhdh --auth-disruptive
 
+# --auth-disruptive enables the optional disruptive authentication phase (TC-42/TC-45).
+# There is no --auth-advanced flag; use --auth-disruptive for these checks.
 # --auth-issuer-url is an optional override when target discovery is unavailable.
 
 # ACM cluster SP tests
@@ -275,6 +277,11 @@ mode obtains a token from the configured OIDC issuer and uses it for API and
 CLI requests. The `auth` label contains authentication boundary checks; those
 checks are skipped when authentication is disabled. Keep credentials in the
 environment or CI secret store; do not commit them.
+
+For Compose auth discovery, set `DCM_AUTH_KEYCLOAK_CONTAINER` only when the
+Keycloak container cannot be found through its Compose service label. The
+optional disruptive checks are enabled with `--auth-disruptive`; there is no
+`--auth-advanced` runner flag.
 
 Service-provider authentication coverage is separate from the shared suite.
 The existing provider tests remain available in authentication-disabled mode.

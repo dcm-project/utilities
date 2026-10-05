@@ -87,6 +87,7 @@ Environment variables:
   DCM_AUTH_ADMIN_URL       RHBK realm admin API URL for TC-45
   DCM_AUTH_ADMIN_TOKEN     RHBK admin bearer token for TC-45
   DCM_AUTH_JWKS_URL        Host-reachable JWKS URL when discovery uses an internal Compose hostname
+  DCM_AUTH_KEYCLOAK_CONTAINER  Compose Keycloak container override for auth discovery
   DCM_AUTH_DCM_LOG_COMMAND  Command returning DCM logs to inspect for TC-46
   DCM_AUTH_RHDH_LOG_COMMAND Command returning RHDH logs to inspect for TC-46
 
@@ -358,7 +359,9 @@ prepare_auth_test_settings() {
             export DCM_AUTH_RESTART_COMMAND="oc -n ${RHBK_NAMESPACE:-rhbk} rollout restart statefulset/rhbk"
             export DCM_AUTH_RHDH_LOG_COMMAND="oc -n ${AUTH_NAMESPACE} logs -l app.kubernetes.io/name=backstage --all-containers=true"
         fi
-        export DCM_AUTH_DCM_LOG_COMMAND="podman logs dcm-e2e_control-plane_1"
+        if [[ -z "${DCM_AUTH_DCM_LOG_COMMAND:-}" ]]; then
+            warn "DCM_AUTH_DCM_LOG_COMMAND is not set for the RHDH target; TC-46 will skip DCM log checks"
+        fi
         return 0
     fi
 
@@ -412,7 +415,21 @@ discover_compose_auth() {
 
     if [[ -z "${AUTH_TOKEN_ISSUER_URL}" && "${internal_issuer}" == *://keycloak:*/* ]]; then
         command -v podman >/dev/null || { err "podman is required to discover the Compose auth endpoint"; return 1; }
-        keycloak_container="${DCM_AUTH_KEYCLOAK_CONTAINER:-dcm-e2e_keycloak_1}"
+        keycloak_container="${DCM_AUTH_KEYCLOAK_CONTAINER:-}"
+        if [[ -z "${keycloak_container}" ]]; then
+            keycloak_container="$(podman ps \
+                --filter label=com.docker.compose.service=keycloak \
+                --format '{{.Names}}' | head -n 1)"
+        fi
+        if [[ -z "${keycloak_container}" ]]; then
+            keycloak_container="$(podman ps \
+                --filter label=io.podman.compose.service=keycloak \
+                --format '{{.Names}}' | head -n 1)"
+        fi
+        if [[ -z "${keycloak_container}" ]]; then
+            err "Unable to discover the Compose Keycloak container; set DCM_AUTH_KEYCLOAK_CONTAINER"
+            return 1
+        fi
         mapped_port="$(podman port "${keycloak_container}" 8080/tcp | head -n 1 | awk -F: '{print $NF}')"
         if [[ -z "${mapped_port}" ]]; then
             err "Unable to discover the host port for ${keycloak_container}"
