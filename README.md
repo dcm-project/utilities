@@ -298,6 +298,12 @@ DCM_AUTH_PASSWORD="$RHBK_TEST_PASSWORD" \
 # ACM cluster SP tests
 ./tests/run-e2e.sh --acm-cluster-service-provider --kubeconfig ~/.kube/config
 ./tests/run-e2e.sh --skip-deploy --label-filter "sp && acm-cluster"
+
+# OSAC real-AAP mode requires a procured Red Hat subscription manifest.
+# The repository does not generate or contain this artifact.
+OSAC_AAP_MANIFEST=tests/manifest.zip \
+./tests/run-e2e.sh --deploy-osac-backend --osac-aap-mode real \
+  --environment-agent --osac-service-provider --label-filter "sp && tier-b-dispatch"
 ```
 
 The same API and CLI tests run in both modes. Authentication-disabled mode is
