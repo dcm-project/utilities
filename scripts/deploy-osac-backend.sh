@@ -289,19 +289,22 @@ tear_down() {
     fi
     # Leave cert-manager itself in place — other workloads may depend on it.
 
-    # Restore the OCP ingress HTTP/2 annotation that deploy() set.
-    # Removing the annotation returns the ingress controller to its default
-    # (HTTP/2 disabled), which is the safest post-teardown state.
+    # Restore the exact OCP ingress HTTP/2 annotation that deploy() replaced.
     log "Restoring OCP ingress HTTP/2 setting"
-    if oc get ingresses.config.openshift.io cluster \
-            -o jsonpath='{.metadata.annotations.ingress\.operator\.openshift\.io/default-enable-http2}' \
-            2>/dev/null | grep -q "true"; then
+    local previous_http2=""
+    if [[ -f "${DEPLOY_DIR}/osac-previous-http2" ]]; then
+        previous_http2="$(<"${DEPLOY_DIR}/osac-previous-http2")"
+    fi
+    if [[ -n "${previous_http2}" ]]; then
+        oc annotate ingresses.config.openshift.io cluster \
+            "ingress.operator.openshift.io/default-enable-http2=${previous_http2}" \
+            --overwrite 2>/dev/null || true
+        info "HTTP/2 annotation restored to ${previous_http2}"
+    else
         oc annotate ingresses.config.openshift.io cluster \
             ingress.operator.openshift.io/default-enable-http2- \
             --overwrite 2>/dev/null || true
-        info "HTTP/2 annotation removed (ingress controller returns to default)"
-    else
-        info "HTTP/2 annotation was not set — no change needed"
+        info "HTTP/2 annotation removed (it was absent before deployment)"
     fi
 
     log "Tear-down complete"
@@ -483,6 +486,9 @@ deploy() {
 
     # Enable HTTP/2 on the OCP ingress (required for gRPC — idempotent)
     log "Enabling HTTP/2 on the OCP ingress controller"
+    oc get ingresses.config.openshift.io cluster \
+        -o jsonpath='{.metadata.annotations.ingress\.operator\.openshift\.io/default-enable-http2}' \
+        2>/dev/null > "${DEPLOY_DIR}/osac-previous-http2"
     oc annotate ingresses.config.openshift.io cluster \
         ingress.operator.openshift.io/default-enable-http2=true \
         --overwrite
@@ -504,9 +510,12 @@ deploy() {
 
     # Apply CA cert chain (cluster-scoped ClusterIssuer + cert-manager-namespaced Issuer/Certificate)
     log "Applying cert-manager CA chain"
+    if oc get clusterissuer osac-ca &>/dev/null && ! phase2_owned clusterissuer osac-ca; then
+        err "ClusterIssuer osac-ca already exists without Phase 2 ownership; refusing to overwrite"
+        exit 1
+    fi
     oc apply -f "${MANIFESTS_DIR}/cert-manager-ca.yaml"
     oc label clusterissuer osac-ca "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite
-    oc label apiservice v1alpha1.console.osac.openshift.io "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite 2>/dev/null || true
     # Wait for the CA secret to be produced in cert-manager namespace
     extract_ca_cert
 
@@ -842,6 +851,11 @@ deploy_phase2() {
     # We use a local values file (tests/osac-backend/phase2/osac-operator-values.yaml)
     # instead of fetching the upstream test/e2e/tierb-config/osac-operator-values.yaml,
     # because the upstream file pins to v0.0.12.
+    if oc get apiservice v1alpha1.console.osac.openshift.io &>/dev/null \
+            && ! phase2_owned apiservice v1alpha1.console.osac.openshift.io; then
+        err "console.osac.openshift.io APIService already exists without Phase 2 ownership; refusing to adopt"
+        return 1
+    fi
     log "Installing osac-operator (chart version: ${OSAC_OPERATOR_CHART_VERSION})"
     local op_values="${phase2_dir}/osac-operator-values.yaml"
     if oc get deployment osac-operator -n "${NS}" &>/dev/null; then
@@ -859,6 +873,10 @@ deploy_phase2() {
             2>&1 | tail -3
     fi
     oc rollout status deployment/osac-operator -n "${NS}" --timeout=3m
+    if oc get apiservice v1alpha1.console.osac.openshift.io &>/dev/null; then
+        oc label apiservice v1alpha1.console.osac.openshift.io \
+            "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite
+    fi
 
     # --- Agent RBAC for osac-operator (v0.0.18 gap-fill) ---------------------
     # osac-operator 0.0.18's manager ClusterRole doesn't include get/list/watch
