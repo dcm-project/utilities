@@ -762,7 +762,7 @@ func deleteNetworkObject(path, description string) error {
 }
 
 func networkTestNamespace() string {
-	if namespace := os.Getenv("SP_K8S_NAMESPACE"); namespace != "" {
+	if namespace := os.Getenv("SP_NETWORK_NAMESPACE"); namespace != "" {
 		return namespace
 	}
 	return "default"

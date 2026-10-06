@@ -410,11 +410,17 @@ exercise network CREATE/DELETE. **FLPATH-4865 remains incomplete until Phase B
 | `AGENT_EMBEDDED_SPS` | `network` (or `container,network`, …) | Enable embedded network SP |
 | `DCM_REGISTRATION_URL` | `http://host.docker.internal:8080` | Agent → CP registration base URL |
 | `AGENT_MESSAGING_URL` | `nats://host.docker.internal:4222` | Agent NATS (CP NATS on host) |
-| `SP_K8S_NAMESPACE` | `dcm-network-e2e` (prefer) or `default` | Namespace for Services; pair with unique `e2e-run` label |
+| `SP_NETWORK_NAMESPACE` | `dcm-network-e2e` (prefer) or `default` | Namespace for Services; pair with unique `e2e-run` label |
 | `AGENT_KUBECONFIG_HOST` | `.kube/config` | Compose-friendly kubeconfig (`https://kubernetes:6443`) |
 | `DCM_GATEWAY_URL` | `http://localhost:8080/api/v1alpha1` | Ginkgo → control-plane |
 | `DCM_AGENT_URL` | `http://localhost:8081/api/v1alpha1` | Ginkgo → environment-agent (health/providers) |
 | `DCM_NETWORK_LB_MODE` | auto-detect MetalLB; `cloud` for a cloud LB | Select `none`, `metallb`, or `cloud` expectations |
+
+Set `SP_NETWORK_NAMESPACE` in the environment-agent's deployment environment (in
+the current local Compose flow, its `deploy/.env`). Also export the same value
+in the shell that runs Utilities' E2E script; `tests/run-e2e.sh` and its Go test
+process do not load the environment-agent's `.env`. Keep both values identical
+so the provider's Service, cluster assertions, and cleanup use the same namespace.
 
 ## Test implementation (utilities)
 
@@ -423,7 +429,7 @@ exercise network CREATE/DELETE. **FLPATH-4865 remains incomplete until Phase B
 | **Test file** | `tests/e2e/sp_network_api_test.go` — `Describe("Network SP API", Label("sp", "network"), ...)` |
 | **Helpers** | Extend `sp_helpers_test.go` / agent helpers: require agent with `network`, provision via CP APIs |
 | **Control-plane** | Reuse `doRequest`, `discoverAgentByServiceType("network", ...)`, `expectRFC9457Problem` |
-| **Cluster asserts** | Use `$CLUSTER_CLI` with the **same** namespace as agent `SP_K8S_NAMESPACE` (prefer `dcm-network-e2e`). Do **not** reuse bare `initKubectl()` — it reads `K8S_CONTAINER_SP_NAMESPACE` / `default` and will miss network Services. Pass ns explicitly or extend helpers for network. |
+| **Cluster asserts** | Use `$CLUSTER_CLI` with the **same** namespace as agent `SP_NETWORK_NAMESPACE` (prefer `dcm-network-e2e`). Do **not** reuse bare `initKubectl()` — it reads `K8S_CONTAINER_SP_NAMESPACE` / `default` and will miss network Services. Pass ns explicitly or extend helpers for network. |
 | **Run** | After [FLPATH-4914](https://redhat.atlassian.net/browse/FLPATH-4914): `--skip-deploy --label-filter 'sp && network'` (stack pre-deployed until harness starts agent) |
 | **Rollout** | Phase A (E2E-01–03) first; Phase B when embedded CRUD path is stable |
 | **Legacy** | Do not rely on `--k8s-network-service-provider` / Quay `k8s-network-service-provider` |
