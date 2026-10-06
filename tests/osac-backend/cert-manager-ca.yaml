@@ -13,6 +13,9 @@ kind: Issuer
 metadata:
   namespace: cert-manager
   name: osac-ca
+  labels:
+    app.kubernetes.io/part-of: osac-sp-e2e
+    osac.dcm.io/owned: "true"
 spec:
   selfSigned: {}
 ---
@@ -21,6 +24,9 @@ kind: Certificate
 metadata:
   namespace: cert-manager
   name: osac-ca
+  labels:
+    app.kubernetes.io/part-of: osac-sp-e2e
+    osac.dcm.io/owned: "true"
 spec:
   commonName: OSAC CA
   isCA: true
@@ -35,6 +41,9 @@ apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
   name: osac-ca
+  labels:
+    app.kubernetes.io/part-of: osac-sp-e2e
+    osac.dcm.io/owned: "true"
 spec:
   ca:
     secretName: osac-ca
