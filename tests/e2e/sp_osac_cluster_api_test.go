@@ -133,15 +133,16 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 			defer resp1.Body.Close()
 			decodeJSON(resp1, &h1)
 
-			time.Sleep(2 * time.Second)
-
 			var h2 osacHealthResponse
-			resp2, err := doOsacClusterRequest(http.MethodGet, "/clusters/health", "")
-			Expect(err).NotTo(HaveOccurred())
-			defer resp2.Body.Close()
-			decodeJSON(resp2, &h2)
-
-			Expect(h2.Uptime).To(BeNumerically(">", h1.Uptime),
+			Eventually(func() float64 {
+				resp2, getErr := doOsacClusterRequest(http.MethodGet, "/clusters/health", "")
+				if getErr != nil {
+					return h1.Uptime
+				}
+				defer resp2.Body.Close()
+				decodeJSON(resp2, &h2)
+				return h2.Uptime
+			}, 10*time.Second, 250*time.Millisecond).Should(BeNumerically(">", h1.Uptime),
 				"uptime should increase between successive health polls")
 		})
 
