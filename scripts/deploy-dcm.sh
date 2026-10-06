@@ -455,7 +455,7 @@ validate_osac_provider() {
     # This makes --osac-service-provider turn-key: no manual `source` of the backend
     # env file and no manual --compose-file for the TLS CA overlay.
     local osac_backend_env="${REPO_ROOT}/deploy/osac-backend.env"
-    if [[ -f "${osac_backend_env}" ]]; then
+    if [[ -f "${osac_backend_env}" ]] && { [[ "${DEPLOY_OSAC_BACKEND}" == true ]] || [[ -z "${SP_OSAC_FULFILLMENT_ADDRESS:-}" ]]; }; then
         info "Found OSAC backend env file: ${osac_backend_env} (sourcing)"
         # shellcheck source=/dev/null
         source "${osac_backend_env}"
@@ -496,6 +496,8 @@ validate_osac_provider() {
                 info "  (Skipping darwin-pf overlay — port-forwards not running on 8443/19443)"
             fi
         fi
+    elif [[ -f "${osac_backend_env}" ]]; then
+        info "Preserving caller-provided OSAC credentials; not sourcing ${osac_backend_env}"
     fi
 
     local missing=()

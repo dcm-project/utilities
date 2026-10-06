@@ -259,6 +259,11 @@ tear_down() {
     else
         info "ClusterIssuer osac-ca is not owned by this deployment — leaving it in place"
     fi
+    for resource in issuer certificate secret; do
+        if phase2_owned "${resource}" osac-ca cert-manager; then
+            oc delete "${resource}" osac-ca -n cert-manager --ignore-not-found
+        fi
+    done
 
     # Remove BareMetalHost fixtures from `default` only if they carry our label.
     log "Removing owned BareMetalHost fixtures from namespace 'default'"
@@ -278,6 +283,11 @@ tear_down() {
     else
         info "Agent CRD absent or not owned by this deploy — leaving in place"
     fi
+    for crd in clusterorders.osac.openshift.io hostedclusters.hypershift.openshift.io nodepools.hypershift.openshift.io osac.openshift.io_baremetalinstances osac.openshift.io_baremetalpools osac.openshift.io_computeinstances tenants.osac.openshift.io osac.openshift.io_externalipattachments osac.openshift.io_externalips; do
+        if phase2_owned crd "${crd}"; then
+            oc delete crd "${crd}" --ignore-not-found
+        fi
+    done
 
     if phase2_owned namespace hardware-inventory; then
         oc delete namespace hardware-inventory --wait=false --ignore-not-found
@@ -520,8 +530,11 @@ deploy() {
     fi
     oc apply -f "${MANIFESTS_DIR}/cert-manager-ca.yaml"
     oc label clusterissuer osac-ca "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite
+    oc label issuer osac-ca -n cert-manager "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite
+    oc label certificate osac-ca -n cert-manager "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite
     # Wait for the CA secret to be produced in cert-manager namespace
     extract_ca_cert
+    oc label secret osac-ca -n cert-manager "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite 2>/dev/null || true
 
     # Copy CA cert into a ca-bundle ConfigMap for the fulfillment-service chart
     oc create configmap ca-bundle \
