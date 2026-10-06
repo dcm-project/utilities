@@ -287,6 +287,12 @@ tear_down() {
     else
         info "hardware-inventory absent or not owned by this deploy — leaving in place"
     fi
+    for kind_name in "clusterrole/osac-fulfillment-hub-reader" "clusterrolebinding/osac-fulfillment-hub-reader"; do
+        kind="${kind_name%%/*}"; name="${kind_name#*/}"
+        if phase2_owned "${kind}" "${name}"; then
+            oc delete "${kind}" "${name}" --ignore-not-found
+        fi
+    done
     # Leave cert-manager itself in place — other workloads may depend on it.
 
     # Restore the exact OCP ingress HTTP/2 annotation that deploy() replaced.
@@ -989,9 +995,12 @@ register_fixtures() {
     local pf_api_pid="" pf_kc_pid=""
     local rc=0
     local own_kc_pf=false
+    local pf_tmp_dir
+    pf_tmp_dir="$(mktemp -d)"
+    chmod 700 "${pf_tmp_dir}"
 
     oc port-forward svc/fulfillment-internal-api "${internal_api_port}:8001" \
-        -n "${NS}" >/tmp/pf-fulfillment-internal-api.log 2>&1 &
+        -n "${NS}" >"${pf_tmp_dir}/internal-api.log" 2>&1 &
     pf_api_pid=$!
 
     # Reuse an existing :8443 listener (e.g. make port-forward-osac) when present;
@@ -1000,7 +1009,7 @@ register_fixtures() {
         info "Keycloak already reachable on :${keycloak_port} — reusing existing forward"
     else
         oc port-forward svc/ffs-keycloak "${keycloak_port}:8443" \
-            -n "${NS}" >/tmp/pf-ffs-keycloak.log 2>&1 &
+            -n "${NS}" >"${pf_tmp_dir}/keycloak.log" 2>&1 &
         pf_kc_pid=$!
         own_kc_pf=true
     fi
@@ -1021,6 +1030,7 @@ register_fixtures() {
         kill "${pf_kc_pid}" 2>/dev/null || true
         wait "${pf_kc_pid}" 2>/dev/null || true
     fi
+    rm -rf "${pf_tmp_dir}"
     return "${rc}"
 }
 
@@ -1057,13 +1067,41 @@ _register_fixtures_body() {
         return 1
     fi
 
-    # Kubeconfig for the Hub: in-cluster endpoint so the fulfillment-service
-    # (running inside OCP) can reach the API server via kubernetes.default.svc.
-    # Use `oc` (already required) rather than `kubectl`.
+    # Build a short-lived, least-privilege Hub credential instead of persisting
+    # the caller's kubeconfig (which may contain cluster-admin credentials).
+    oc create serviceaccount osac-fulfillment-hub -n default --dry-run=client -o yaml | oc apply -f -
+    oc create clusterrole osac-fulfillment-hub-reader --dry-run=client -o yaml \
+        --verb=get --verb=list --verb=watch \
+        --resource=clusterorders.osac.openshift.io,computeinstances.osac.openshift.io,hostedclusters.hypershift.openshift.io,nodepools.hypershift.openshift.io,agents.agent-install.openshift.io \
+        | oc apply -f -
+    oc create clusterrolebinding osac-fulfillment-hub-reader --clusterrole=osac-fulfillment-hub-reader \
+        --serviceaccount=default:osac-fulfillment-hub --dry-run=client -o yaml | oc apply -f -
+    oc label clusterrole osac-fulfillment-hub-reader "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite
+    oc label clusterrolebinding osac-fulfillment-hub-reader "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite
+    local hub_token hub_ca
+    hub_token="$(oc create token osac-fulfillment-hub -n default --duration=1h)"
+    hub_ca="$(oc get configmap kube-root-ca.crt -n default -o jsonpath='{.data.ca\.crt}' | base64 | tr -d '\n')"
     local kubeconfig_b64
-    kubeconfig_b64="$(oc config view --raw --minify \
-        | sed -E 's#server: https://[^[:space:]]+#server: https://kubernetes.default.svc#' \
-        | base64 | tr -d '\n')"
+    kubeconfig_b64="$(cat <<EOF | base64 | tr -d '\n'
+apiVersion: v1
+kind: Config
+clusters:
+- name: osac-hub
+  cluster:
+    server: https://kubernetes.default.svc
+    certificate-authority-data: ${hub_ca}
+contexts:
+- name: osac-hub
+  context:
+    cluster: osac-hub
+    user: osac-fulfillment-hub
+current-context: osac-hub
+users:
+- name: osac-fulfillment-hub
+  user:
+    token: ${hub_token}
+EOF
+)"
 
     grpc_create() {
         # grpc_create LABEL SERVICE METHOD JSON_BODY
