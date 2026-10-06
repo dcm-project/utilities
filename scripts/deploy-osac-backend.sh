@@ -251,17 +251,15 @@ tear_down() {
         oc delete apiservice v1alpha1.console.osac.openshift.io --ignore-not-found
     fi
 
-    # Strip finalizers from any remaining ClusterOrders before deleting the
-    # namespace so the operator (already stopping) doesn't block deletion.
-    local co
-    for co in $(oc get clusterorder -n "${NS}" -o name 2>/dev/null); do
-        oc patch "${co}" -n "${NS}" \
-            --type=json \
-            -p='[{"op":"remove","path":"/metadata/finalizers"}]' \
-            2>/dev/null || true
-    done
-
     if phase2_owned namespace "${NS}"; then
+        # Only mutate finalizers inside a namespace owned by this deployment.
+        local co
+        for co in $(oc get clusterorder -n "${NS}" -o name 2>/dev/null); do
+            oc patch "${co}" -n "${NS}" \
+                --type=json \
+                -p='[{"op":"remove","path":"/metadata/finalizers"}]' \
+                2>/dev/null || true
+        done
         oc delete namespace "${NS}" --wait=true
         info "Namespace ${NS} deleted"
     elif oc get namespace "${NS}" &>/dev/null; then
@@ -835,7 +833,7 @@ deploy_phase2() {
     log "Installing Phase 2 CRDs"
     local crds_tmp="${tmp_dir}/crds"
     mkdir -p "${crds_tmp}"
-    local crd
+    local crd crd_name
     for crd in \
         baremetalhosts.metal3.io.yaml \
         clusterorders.osac.openshift.io.yaml \
@@ -869,8 +867,15 @@ deploy_phase2() {
             info "baremetalhosts.metal3.io already present (CNV/metal3) — skipping"
             continue
         fi
+        crd_name="${crd%.yaml}"
+        if oc get crd "${crd_name}" &>/dev/null \
+                && ! phase2_owned crd "${crd_name}"; then
+            err "CRD ${crd_name} already exists without Phase 2 ownership; refusing to overwrite"
+            return 1
+        fi
         # --server-side avoids annotation size limit on large CRDs.
         oc_apply_filtered -f "${crds_tmp}/${crd}" --server-side
+        oc label crd "${crd_name}" "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}" --overwrite
     done
     info "CRDs applied"
 

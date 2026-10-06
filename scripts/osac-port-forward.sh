@@ -29,6 +29,9 @@
 set -euo pipefail
 
 NAMESPACE="${OSAC_BACKEND_NAMESPACE:-osac-test-backend}"
+PF_TMP_DIR="${TMPDIR:-/tmp}/osac-pf-${NAMESPACE//[^A-Za-z0-9]/_}"
+mkdir -p "${PF_TMP_DIR}"
+chmod 700 "${PF_TMP_DIR}"
 STOP=false
 ENSURE=false
 
@@ -79,7 +82,7 @@ if [[ "${STOP}" == true ]]; then
     # Also stop any oc port-forward processes owned by this script's launchd agents.
     # Use exact PIDs from the PID files rather than broad pkill -f so we don't
     # inadvertently stop port-forwards started by unrelated invocations.
-    for pidfile in /tmp/pf-ffs-keycloak.pid /tmp/pf-fulfillment-grpc-server.pid; do
+    for pidfile in "${PF_TMP_DIR}/keycloak.pid" "${PF_TMP_DIR}/grpc.pid"; do
         if [[ -f "${pidfile}" ]]; then
             pid=$(cat "${pidfile}")
             if kill -0 "${pid}" 2>/dev/null; then
@@ -103,33 +106,33 @@ OC_BIN="$(command -v oc 2>/dev/null || echo "/usr/local/bin/oc")"
 KC_PATH="${KUBECONFIG:-${HOME}/.kube/config}"
 
 # Write the restart-loop scripts with absolute paths (launchd has a minimal PATH).
-cat > /tmp/osac-pf-keycloak.sh << EOF
+cat > "${PF_TMP_DIR}/keycloak.sh" << EOF
 #!/bin/bash
 export KUBECONFIG="${KC_PATH}"
 while true; do
     "${OC_BIN}" port-forward svc/ffs-keycloak 8443:8443 \\
-        -n "${NAMESPACE}" --address 127.0.0.1 >>/tmp/pf-ffs-keycloak.log 2>&1
+        -n "${NAMESPACE}" --address 127.0.0.1 >>"${PF_TMP_DIR}/keycloak.log" 2>&1
     sleep 1
 done
 EOF
 
-cat > /tmp/osac-pf-grpc.sh << EOF
+cat > "${PF_TMP_DIR}/grpc.sh" << EOF
 #!/bin/bash
 export KUBECONFIG="${KC_PATH}"
 while true; do
     "${OC_BIN}" port-forward svc/fulfillment-grpc-server 19443:8000 \\
-        -n "${NAMESPACE}" --address 127.0.0.1 >>/tmp/pf-fulfillment-grpc-server.log 2>&1
+        -n "${NAMESPACE}" --address 127.0.0.1 >>"${PF_TMP_DIR}/grpc.log" 2>&1
     sleep 1
 done
 EOF
-chmod +x /tmp/osac-pf-keycloak.sh /tmp/osac-pf-grpc.sh
+chmod +x "${PF_TMP_DIR}/keycloak.sh" "${PF_TMP_DIR}/grpc.sh"
 
 # Remove any existing launchd agents before registering new ones.
 launchctl remove com.osac.pf.keycloak 2>/dev/null || true
 launchctl remove com.osac.pf.grpc     2>/dev/null || true
 
 # Stop any oc port-forward processes left behind by a previous invocation.
-for pidfile in /tmp/pf-ffs-keycloak.pid /tmp/pf-fulfillment-grpc-server.pid; do
+    for pidfile in "${PF_TMP_DIR}/keycloak.pid" "${PF_TMP_DIR}/grpc.pid"; do
     if [[ -f "${pidfile}" ]]; then
         pid=$(cat "${pidfile}")
         if kill -0 "${pid}" 2>/dev/null; then
@@ -141,15 +144,15 @@ done
 sleep 1
 
 # Register with launchd — survives terminal exit and shell session boundaries.
-launchctl submit -l com.osac.pf.keycloak -- /bin/bash /tmp/osac-pf-keycloak.sh
-launchctl submit -l com.osac.pf.grpc     -- /bin/bash /tmp/osac-pf-grpc.sh
+launchctl submit -l com.osac.pf.keycloak -- /bin/bash "${PF_TMP_DIR}/keycloak.sh"
+launchctl submit -l com.osac.pf.grpc     -- /bin/bash "${PF_TMP_DIR}/grpc.sh"
 
 # Record the PIDs launchd assigned so stop can clean them specifically.
 sleep 2
 launchctl list com.osac.pf.keycloak 2>/dev/null \
-    | awk -F'"' '/"PID"/{print $4}' > /tmp/pf-ffs-keycloak.pid || true
+    | awk -F'"' '/"PID"/{print $4}' > "${PF_TMP_DIR}/keycloak.pid" || true
 launchctl list com.osac.pf.grpc 2>/dev/null \
-    | awk -F'"' '/"PID"/{print $4}' > /tmp/pf-fulfillment-grpc-server.pid || true
+    | awk -F'"' '/"PID"/{print $4}' > "${PF_TMP_DIR}/grpc.pid" || true
 
 if ! wait_for_port 8443; then
     echo "ERROR: Keycloak port-forward failed to listen on 8443; inspect /tmp/pf-ffs-keycloak.log" >&2
@@ -163,5 +166,5 @@ fi
 echo "[$(date -u '+%H:%M:%S')] OSAC port-forward launchd agents registered:"
 echo "  com.osac.pf.keycloak  → 127.0.0.1:8443  → svc/ffs-keycloak:8443"
 echo "  com.osac.pf.grpc      → 127.0.0.1:19443 → svc/fulfillment-grpc-server:8000"
-echo "  Logs: /tmp/pf-ffs-keycloak.log  /tmp/pf-fulfillment-grpc-server.log"
+echo "  Logs: ${PF_TMP_DIR}/keycloak.log  ${PF_TMP_DIR}/grpc.log"
 echo "  Stop: make stop-port-forward-osac"
