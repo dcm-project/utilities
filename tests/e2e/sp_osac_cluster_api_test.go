@@ -305,9 +305,8 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 				"max_page_size=0 must return 200 (treat as server default per AEP-132), not %d", resp.StatusCode)
 		})
 
-		// KNOWN BACKEND GAP: fulfillment-service does not enforce the AEP-132 constraint
-		// that max_page_size > 100 must be rejected with 400. It returns 200 instead.
-		// Tracked under FLPATH-4459 (epic) / FLPATH-4463 (story).
+		// Known OSAC SP product gap: FLPATH-4945 tracks enforcement of the DCM/AEP-132
+		// max_page_size limit. Keep this pending until the product fix is deployed.
 		PIt("rejects max_page_size > 100 with 400 (AEP-132)", func() {
 			resp, err := doOsacClusterRequest(http.MethodGet, "/clusters?max_page_size=101", "")
 			Expect(err).NotTo(HaveOccurred())
