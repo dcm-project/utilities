@@ -154,6 +154,7 @@ EOF
   --deploy-cnv                   Deploy OpenShift Virtualization (CNV) on the cluster before starting the stack (opt-in, heavy)
   --deploy-osac-backend          Deploy the self-contained OSAC fulfillment-service backend before
                                   starting the stack (opt-in, heavy; see scripts/deploy-osac-backend.sh).
+  --allow-tierb-credentials      Explicitly allow committed Tier B test credentials in a disposable test environment.
                                   With --tear-down, also removes the OSAC backend namespace.
   --acm-cluster-sp-repo URL      Git repo for acm-cluster-service-provider (default: ${DEFAULT_ACM_CLUSTER_SP_REPO})
   --acm-cluster-sp-branch REF    Branch to clone (default: ${DEFAULT_ACM_CLUSTER_SP_BRANCH})
@@ -964,6 +965,7 @@ CLEANUP_ON_FAILURE=false
 DEPLOY_ACM_MCE=""
 DEPLOY_CNV=false
 DEPLOY_OSAC_BACKEND=false
+ALLOW_TIERB_CREDENTIALS=false
 GITOPS_ENABLED=false
 ACM_CLUSTER_SP_REPO="${DEFAULT_ACM_CLUSTER_SP_REPO}"
 ACM_CLUSTER_SP_BRANCH="${DEFAULT_ACM_CLUSTER_SP_BRANCH}"
@@ -1041,6 +1043,8 @@ while [[ $# -gt 0 ]]; do
             DEPLOY_CNV=true; shift ;;
         --deploy-osac-backend)
             DEPLOY_OSAC_BACKEND=true; shift ;;
+        --allow-tierb-credentials)
+            ALLOW_TIERB_CREDENTIALS=true; shift ;;
         --deploy-acm)
             [[ -n "${DEPLOY_ACM_MCE}" ]] && { err "--deploy-acm and --deploy-mce are mutually exclusive"; exit 1; }
             DEPLOY_ACM_MCE="acm"; shift ;;
@@ -1286,7 +1290,9 @@ fi
 # them at compose bring-up, not at runtime like the ACM cluster SP does.
 if [[ "${DEPLOY_OSAC_BACKEND}" == true ]]; then
     log "Deploying OSAC backend on the cluster (idempotent — skips already-present resources)"
-    KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh"
+    backend_args=()
+    [[ "${ALLOW_TIERB_CREDENTIALS}" == true ]] && backend_args+=(--allow-tierb-credentials)
+    KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" "${backend_args[@]}"
 fi
 
 # Validate and export env vars for each enabled provider

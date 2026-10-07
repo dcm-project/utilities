@@ -273,7 +273,7 @@ DCM_AUTH_PASSWORD="$RHBK_TEST_PASSWORD" \
 # OSAC real-AAP mode requires a procured Red Hat subscription manifest.
 # The repository does not generate or contain this artifact.
 OSAC_AAP_MANIFEST=tests/manifest.zip \
-./tests/run-e2e.sh --deploy-osac-backend --osac-aap-mode real \
+./tests/run-e2e.sh --deploy-osac-backend --allow-tierb-credentials --osac-aap-mode real \
   --environment-agent --osac-service-provider --label-filter "sp && tier-b-dispatch"
 ```
 
