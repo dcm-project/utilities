@@ -158,6 +158,7 @@ EOF
                                   starting the stack (opt-in, heavy; see scripts/deploy-osac-backend.sh).
                                   On macOS with --osac-service-provider, also starts the required
                                   launchd-managed backend port-forwards automatically.
+  --allow-tierb-credentials      Explicitly allow committed Tier B test credentials in a disposable test environment.
                                   With --tear-down, also removes the OSAC backend namespace.
   --osac-aap-mode MODE           Select OSAC operator AAP backend: mock (default) or real.
                                   real deploys the disposable AAP Gateway integration.
@@ -1036,6 +1037,7 @@ DEPLOY_ACM_MCE=""
 DEPLOY_CNV=false
 DEPLOY_OSAC_BACKEND=false
 OSAC_AAP_MODE="${OSAC_AAP_MODE:-mock}"
+ALLOW_TIERB_CREDENTIALS=false
 GITOPS_ENABLED=false
 ACM_CLUSTER_SP_REPO="${DEFAULT_ACM_CLUSTER_SP_REPO}"
 ACM_CLUSTER_SP_BRANCH="${DEFAULT_ACM_CLUSTER_SP_BRANCH}"
@@ -1116,6 +1118,8 @@ while [[ $# -gt 0 ]]; do
         --osac-aap-mode)
             [[ "$2" == "mock" || "$2" == "real" ]] || { err "--osac-aap-mode must be mock or real"; exit 1; }
             OSAC_AAP_MODE="$2"; shift 2 ;;
+        --allow-tierb-credentials)
+            ALLOW_TIERB_CREDENTIALS=true; shift ;;
         --deploy-acm)
             [[ -n "${DEPLOY_ACM_MCE}" ]] && { err "--deploy-acm and --deploy-mce are mutually exclusive"; exit 1; }
             DEPLOY_ACM_MCE="acm"; shift ;;
@@ -1365,8 +1369,10 @@ fi
 # them at compose bring-up, not at runtime like the ACM cluster SP does.
 if [[ "${DEPLOY_OSAC_BACKEND}" == true ]]; then
     log "Deploying OSAC backend on the cluster (idempotent — skips already-present resources)"
-    KUBECONFIG="${DCM_KUBECONFIG}" \
-        bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" --aap-mode "${OSAC_AAP_MODE}"
+    backend_args=()
+    [[ "${ALLOW_TIERB_CREDENTIALS}" == true ]] && backend_args+=(--allow-tierb-credentials)
+    KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" \
+        --aap-mode "${OSAC_AAP_MODE}" "${backend_args[@]}"
     ensure_osac_port_forwards || exit 1
 fi
 

@@ -58,6 +58,7 @@ BMFO_CHART_VERSION="${BMFO_CHART_VERSION:-0.0.12}"
 OSAC_SP_UPSTREAM_REF="${OSAC_SP_UPSTREAM_REF:-eb1473848b9f8b130b3f315f00f800c102062d3e}"
 readonly OSAC_SP_UPSTREAM_RAW="https://raw.githubusercontent.com/dcm-project/osac-service-provider"
 TEAR_DOWN=false
+ALLOW_TIERB_CREDENTIALS=false
 SKIP_CERT_MANAGER=false
 SKIP_PHASE2=false
 OSAC_AAP_MODE="${OSAC_AAP_MODE:-mock}"
@@ -108,6 +109,7 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --tear-down)           TEAR_DOWN=true; shift ;;
+        --allow-tierb-credentials) ALLOW_TIERB_CREDENTIALS=true; shift ;;
         --namespace)           OSAC_BACKEND_NAMESPACE="$2"; shift 2 ;;
         --chart-version)       FULFILLMENT_SERVICE_CHART_VERSION="$2"; shift 2 ;;
         --skip-cert-manager)   SKIP_CERT_MANAGER=true; shift ;;
@@ -127,6 +129,9 @@ readonly NS="${OSAC_BACKEND_NAMESPACE}"
 
 if [[ "${TEAR_DOWN}" == true && "${OSAC_AAP_MODE}" == "real" ]]; then
     OSAC_BACKEND_NAMESPACE="${NS}" bash "${SCRIPT_DIR}/deploy-osac-aap.sh" --tear-down
+if [[ "${TEAR_DOWN}" != true && "${ALLOW_TIERB_CREDENTIALS}" != true ]]; then
+    err "This deployment uses committed Tier B test credentials. Re-run with --allow-tierb-credentials only in a disposable test environment."
+    exit 1
 fi
 
 # --- Tool checks -------------------------------------------------------------

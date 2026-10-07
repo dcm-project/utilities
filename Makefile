@@ -16,7 +16,7 @@ e2e-up: ## Deploy the full DCM stack
 	./scripts/deploy-dcm.sh
 
 deploy-osac-backend: ## Deploy OSAC fulfillment-service backend on OCP (for OSAC SP E2E tests)
-	./scripts/deploy-osac-backend.sh
+	./scripts/deploy-osac-backend.sh --allow-tierb-credentials
 
 teardown-osac-backend: ## Remove the OSAC backend from OCP
 	./scripts/deploy-osac-backend.sh --tear-down

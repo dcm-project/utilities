@@ -237,7 +237,8 @@ e2e infrastructure (`tests/osac-backend/`).
 
 ```bash
 oc_login_auto                       # log in to edge94
-./scripts/deploy-dcm.sh --deploy-osac-backend --environment-agent --osac-service-provider
+./scripts/deploy-dcm.sh --deploy-osac-backend --allow-tierb-credentials \
+  --environment-agent --osac-service-provider
 ```
 
 `--deploy-osac-backend` runs `scripts/deploy-osac-backend.sh` before compose bring-up
