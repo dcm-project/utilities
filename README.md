@@ -202,6 +202,7 @@ make help
 | `DCM_STORAGE_SP_URL` | `http://localhost:8089/api/v1alpha1` | Storage SP direct URL (requires published port) |
 | `DCM_AGENT_URL` | `http://localhost:8081/api/v1alpha1` | Environment-agent API (embedded network via `AGENT_EMBEDDED_SPS=network`) |
 | `DCM_NETWORK_SP_ENABLED` | `false` | Require the embedded Network SP; when `false`, Network specs are skipped |
+| `SP_NETWORK_NAMESPACE` | `default` (test helper fallback) | Namespace for embedded Network SP resources and E2E checks; set the same value in the agent deployment and test shell |
 | `DCM_ACM_CLUSTER_SP_URL` | `http://localhost:8083/api/v1alpha1` | ACM Cluster SP direct URL (requires published port) |
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS server URL for status event tests |
 | `DCM_CLI_PATH` | (auto-resolved) | Path to `dcm` CLI binary |
@@ -226,6 +227,25 @@ immediately.
 The network NodePort tests select an unused port after listing Services across
 the cluster. The test identity needs permission to list Services in all
 namespaces.
+
+For embedded Network SP E2E tests, keep `SP_NETWORK_NAMESPACE` identical in the
+environment-agent deployment and the shell that runs Utilities' tests. In the
+local Compose flow, set it in the environment-agent's deployment environment
+(`deploy/.env`), then export the same value in the test shell. For example:
+
+```bash
+# In the environment-agent deployment's deploy/.env
+SP_NETWORK_NAMESPACE=dcm-network-e2e
+
+# In the shell that runs Utilities' E2E tests
+export SP_NETWORK_NAMESPACE=dcm-network-e2e
+./tests/run-e2e.sh --skip-deploy --label-filter 'sp && network'
+```
+
+`tests/run-e2e.sh` and its Go test process do not load the agent's `deploy/.env`.
+Set both values so the provider's Service, cluster assertions, and cleanup use
+the same namespace. The test helper falls back to `default` when the variable is
+unset; `dcm-network-e2e` is preferred for isolation.
 
 ### Test Harness Flags
 

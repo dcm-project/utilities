@@ -242,6 +242,7 @@ CLI tests are skipped (not failed) if no binary is available.
 - `DCM_ACM_CLUSTER_SP_URL` env var overrides the ACM cluster SP endpoint (default: `http://localhost:8083/api/v1alpha1`)
 - `DCM_AGENT_URL` env var overrides the environment-agent endpoint (default: `http://localhost:8081/api/v1alpha1`)
 - `DCM_NETWORK_SP_ENABLED=true` requires the embedded Network SP. The suite waits up to 30 seconds for the agent and provider to become ready, then fails if they do not. When unset or `false`, Network SP specs skip immediately.
+- `SP_NETWORK_NAMESPACE` selects the namespace for embedded Network SP resources, assertions, and cleanup. For local Compose, set it in the environment-agent deployment's `deploy/.env` and export the same value in the shell running Utilities' E2E tests; `tests/run-e2e.sh` and its Go test process do not load that `.env`. The test helper falls back to `default` when unset; prefer `dcm-network-e2e` for isolation.
 - `DCM_NATS_URL` env var overrides the NATS server (default: `nats://localhost:4222`)
 - `DCM_CLI_PATH` env var specifies the CLI binary path
 - `DCM_CONTAINER_PROVIDER_NAME` env var overrides which container provider to target in core platform tests (default: first `service_type=container` provider found)
