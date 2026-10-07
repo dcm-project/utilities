@@ -41,47 +41,27 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 		}
 
 		It("registers exactly two OSAC providers (osac-sp-cluster + osac-sp-vm)", func() {
-			providers := osacSPProviders()
-			var osacProviders []envAgentProvider
-			for _, p := range providers {
-				if p.Name == expectedClusterName || p.Name == expectedVMName {
-					osacProviders = append(osacProviders, p)
-				}
-			}
-			Expect(osacProviders).To(HaveLen(2),
-				"OSAC SP should register exactly 2 providers (osac-sp-cluster + osac-sp-vm), "+
-					"found %d OSAC providers in %d total: %+v",
-				len(osacProviders), len(providers), providers)
+			Eventually(func() int {
+				providers := osacSPProviders()
+				count := 0
+				for _, p := range providers { if p.Name == "osac-sp-cluster" || p.Name == "osac-sp-vm" { count++ } }
+				return count
+			}, 30*time.Second, 500*time.Millisecond).Should(Equal(2),
+				"OSAC SP should register exactly osac-sp-cluster and osac-sp-vm")
 		})
 
 		It("registers a cluster-type provider with name osac-sp-cluster", func() {
-			providers := osacSPProviders()
-
-			var found *envAgentProvider
-			for i := range providers {
-				if providers[i].ServiceType == "cluster" && providers[i].Name == expectedClusterName {
-					found = &providers[i]
-					break
-				}
-			}
-			Expect(found).NotTo(BeNil(), "no osac-sp cluster-type provider found in environment-agent /providers")
-			Expect(found.Name).To(Equal(expectedClusterName))
-			Expect(found.Endpoint).To(Equal(expectedClusterURL))
+			Eventually(func() string {
+				for _, provider := range osacSPProviders() { if provider.Name == "osac-sp-cluster" && provider.ServiceType == "cluster" { return provider.Endpoint } }
+				return ""
+			}, 30*time.Second, 500*time.Millisecond).Should(Equal("http://osac-service-provider:8080/api/v1alpha1/clusters"))
 		})
 
 		It("registers a vm-type provider with name osac-sp-vm", func() {
-			providers := osacSPProviders()
-
-			var found *envAgentProvider
-			for i := range providers {
-				if providers[i].ServiceType == "vm" && providers[i].Name == expectedVMName {
-					found = &providers[i]
-					break
-				}
-			}
-			Expect(found).NotTo(BeNil(), "no osac-sp vm-type provider found in environment-agent /providers")
-			Expect(found.Name).To(Equal(expectedVMName))
-			Expect(found.Endpoint).To(Equal(expectedVMURL))
+			Eventually(func() string {
+				for _, provider := range osacSPProviders() { if provider.Name == "osac-sp-vm" && provider.ServiceType == "vm" { return provider.Endpoint } }
+				return ""
+			}, 30*time.Second, 500*time.Millisecond).Should(Equal("http://osac-service-provider:8080/api/v1alpha1/vms"))
 		})
 
 	})

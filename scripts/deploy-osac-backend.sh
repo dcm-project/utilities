@@ -538,6 +538,8 @@ deploy() {
 
     # Enable HTTP/2 on the OCP ingress (required for gRPC — idempotent)
     log "Enabling HTTP/2 on the OCP ingress controller"
+    mkdir -p "${DEPLOY_DIR}"
+    chmod 700 "${DEPLOY_DIR}"
     oc get ingresses.config.openshift.io cluster \
         -o jsonpath='{.metadata.annotations.ingress\.operator\.openshift\.io/default-enable-http2}' \
         2>/dev/null > "${DEPLOY_DIR}/osac-previous-http2"
@@ -552,7 +554,11 @@ deploy() {
         oc label namespace "${NS}" "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}"
         info "Namespace ${NS} created"
     else
-        info "Namespace ${NS} already exists"
+        if ! phase2_owned namespace "${NS}"; then
+            err "Namespace ${NS} already exists without Phase 2 ownership; refusing to modify it"
+            exit 1
+        fi
+        info "Namespace ${NS} already exists and is owned by this deployment"
     fi
 
     # Install cert-manager if needed
@@ -1290,6 +1296,16 @@ _register_fixtures_body() {
 
     # Build a short-lived, least-privilege Hub credential instead of persisting
     # the caller's kubeconfig (which may contain cluster-admin credentials).
+    if oc get clusterrole osac-fulfillment-hub-reader &>/dev/null \
+            && ! phase2_owned clusterrole osac-fulfillment-hub-reader; then
+        err "ClusterRole osac-fulfillment-hub-reader exists without Phase 2 ownership; refusing to adopt"
+        return 1
+    fi
+    if oc get clusterrolebinding osac-fulfillment-hub-reader &>/dev/null \
+            && ! phase2_owned clusterrolebinding osac-fulfillment-hub-reader; then
+        err "ClusterRoleBinding osac-fulfillment-hub-reader exists without Phase 2 ownership; refusing to adopt"
+        return 1
+    fi
     oc create serviceaccount osac-fulfillment-hub -n default --dry-run=client -o yaml | oc apply -f -
     oc create clusterrole osac-fulfillment-hub-reader --dry-run=client -o yaml \
         --verb=get --verb=list --verb=watch \
@@ -1431,10 +1447,10 @@ EOF
 
 check_tools
 check_oc_login
-check_cluster_health
 
 if [[ "${TEAR_DOWN}" == true ]]; then
     tear_down
 else
+    check_cluster_health
     deploy
 fi
