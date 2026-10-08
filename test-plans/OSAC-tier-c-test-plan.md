@@ -214,6 +214,12 @@ of real infrastructure. Moving from Kind/Tier B to OCP is meaningful for deploym
 RBAC, TLS, namespace, CRD, service-network, and controller-initialization failures, but
 does not substitute for Tier C lifecycle coverage.
 
+**External-provider smoke path:** `make test-osac-external` exercises the control-plane
+catalog-item create through environment-agent to an external OSAC SP. It requires a
+pre-seeded OSAC catalog item ID in `OSAC_EXTERNAL_CATALOG_ITEM_ID` and is intentionally a
+single request-shape/forwarding smoke test, not exhaustive rehydration coverage. Direct
+SP contract tests and Tier B++ dispatch remain separate targets.
+
 **Preconditions:** explicitly opt in to the Phase 2 backend (do not use `--skip-phase2`);
 confirm the operator and BMFO are running, the intended ClusterTemplate/HostType/Hub
 fixtures are registered, and the mock and BMH fixtures are present. Use a dedicated
