@@ -273,6 +273,11 @@ the fulfillment-service public Update API does not provide external status injec
 SP status/error scenarios use the deterministic fulfillment-service simulator instead.
 The controller simulator does not create Agents, BMIs, BMHs, AAP jobs, kubevirt resources,
 or networks. Its Kubernetes manifest is not included in the default backend deployment.
+**External-provider smoke path:** `make test-osac-external` exercises the control-plane
+catalog-item create through environment-agent to an external OSAC SP. It requires a
+pre-seeded OSAC catalog item ID in `OSAC_EXTERNAL_CATALOG_ITEM_ID` and is intentionally a
+single request-shape/forwarding smoke test, not exhaustive rehydration coverage. Direct
+SP contract tests and Tier B++ dispatch remain separate targets.
 
 **Preconditions:** explicitly opt in to the Phase 2 backend (do not use `--skip-phase2`);
 confirm the operator and BMFO are running, the intended ClusterTemplate/HostType/Hub

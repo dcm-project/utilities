@@ -1,4 +1,4 @@
-.PHONY: help e2e-up test-e2e test-smoke test-cli test-sp test-acm-sp test-kubevirt-sp test-osac-sp test-osac-dispatch test-core test-rehydration test-rehydration-safe test-rehydration-cli e2e-down test-e2e-full download-cli cli-version lint
+.PHONY: help e2e-up test-e2e test-smoke test-cli test-sp test-acm-sp test-kubevirt-sp test-osac-sp test-osac-dispatch test-osac-external test-core test-rehydration test-rehydration-safe test-rehydration-cli e2e-down test-e2e-full download-cli cli-version lint
 
 # Set JUNIT_REPORT to a filename to produce JUnit XML output.
 # Example: make test-e2e JUNIT_REPORT=results.xml
@@ -56,6 +56,9 @@ test-osac-sp: ## Run OSAC SP contract tests only (--environment-agent --osac-ser
 
 test-osac-dispatch: ## Run opt-in OSAC Tier B++ dispatch tests
 	cd tests/e2e && $(GINKGO_BASE) --label-filter='osac && tier-b-dispatch' .
+
+test-osac-external: ## Run OSAC control-plane to external-provider smoke test
+	cd tests/e2e && $(GINKGO_BASE) --label-filter='osac && external-provider' .
 
 test-core: ## Run core platform tests (full control plane provisioning flow)
 	cd tests/e2e && $(GINKGO_BASE) --label-filter=core .
