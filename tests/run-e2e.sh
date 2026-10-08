@@ -37,6 +37,9 @@ Options:
   --gateway-url URL            Override DCM_GATEWAY_URL (default: http://localhost:8080/api/v1alpha1)
   --label-filter EXPR          Ginkgo label filter (e.g. "smoke", "cli")
   --junit-report FILE          Write JUnit XML report to FILE
+  --with-environment-agent     Enable environment-agent (forwards to deploy; exports DCM_AGENT_URL)
+  --agent-embedded-sps LIST    Embedded SPs for the agent (e.g. container,vm,network)
+  --agent-port PORT            Host port for environment-agent API (default: 8081)
   --help                       Show this help message
 
 Deploy passthrough flags (forwarded to deploy-dcm.sh):
@@ -48,12 +51,13 @@ Deploy passthrough flags (forwarded to deploy-dcm.sh):
 
 Service provider flags (forwarded to deploy-dcm.sh):
   --all-service-providers           Enable all SPs
-  --k8s-container-service-provider  Enable the k8s container SP
+  --k8s-container-service-provider  Enable the k8s container SP (standalone)
   --k8s-storage-service-provider    Enable the k8s storage SP
-  --kubevirt-service-provider       Enable the kubevirt SP
-  --acm-cluster-service-provider    Enable the ACM cluster SP
+  --kubevirt-service-provider       Enable the kubevirt SP (standalone)
+  --acm-cluster-service-provider    Enable the ACM cluster SP (standalone)
   --deploy-acm                      Deploy ACM on the cluster (opt-in, heavy)
   --deploy-mce                      Deploy MCE on the cluster (opt-in, heavy)
+  --deploy-cnv                      Deploy CNV on the cluster (opt-in, heavy)
   --kubeconfig PATH                 Path to kubeconfig file
   --k8s-container-namespace NS      Namespace for container workloads
   --k8s-storage-namespace NS        Namespace for storage PVCs
@@ -65,11 +69,12 @@ Service provider flags (forwarded to deploy-dcm.sh):
 
 Environment variables:
   DCM_AGENT_URL            Environment-agent API URL (default: http://localhost:8081/api/v1alpha1)
-  DCM_NETWORK_SP_ENABLED   Require the embedded Network SP (default: false)
+  DCM_EMBEDDED_SPS         Optional discovery hint of embedded SPs (not readiness evidence); live /providers Ready types are merged for deploy awareness
+  DCM_NETWORK_SP_ENABLED   Require the embedded Network SP (default: false; auto true when network is embedded)
   DCM_CONTAINER_SP_URL     Container SP direct URL (default: http://localhost:8082/api/v1alpha1)
   DCM_STORAGE_SP_URL       Storage SP direct URL (default: http://localhost:8089/api/v1alpha1)
   DCM_ACM_CLUSTER_SP_URL   ACM Cluster SP direct URL (default: http://localhost:8083/api/v1alpha1)
-  DCM_KUBEVIRT_SP_URL      KubeVirt SP direct URL (default: http://localhost:8081/api/v1alpha1)
+  DCM_KUBEVIRT_SP_URL      KubeVirt SP direct URL (do not default to :8081 when the agent owns that port)
   DCM_NATS_URL             NATS URL for event tests (default: nats://localhost:4222)
   DCM_GATEWAY_URL          Control plane API URL (default: http://localhost:8080/api/v1alpha1)
   DCM_AUTH_ENABLED         Enable OIDC bearer authentication (default: false)
@@ -203,7 +208,88 @@ DEPLOY_ARGS=()
 ENABLE_CONTAINER_SP=false
 ENABLE_ACM_CLUSTER_SP=false
 ENABLE_KUBEVIRT_SP=false
+WITH_ENVIRONMENT_AGENT=false
+AGENT_EMBEDDED_SPS="${AGENT_EMBEDDED_SPS:-${DCM_EMBEDDED_SPS:-}}"
+AGENT_PORT="${AGENT_PORT:-8081}"
 KUBEVIRT_VM_NS_ARG=""
+
+agent_list_contains() {
+    local needle="$1"
+    local norm
+    norm="$(printf '%s' "${AGENT_EMBEDDED_SPS}" | tr -d '[:space:]')"
+    case ",${norm}," in
+        *,"${needle}",*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Merge comma-separated SP tokens (lowercase, de-duplicated, first-seen order).
+merge_embedded_sps() {
+    python3 -c '
+import sys
+seen = []
+for raw in ",".join(sys.argv[1:]).split(","):
+    tok = raw.strip().lower()
+    if tok and tok not in seen:
+        seen.append(tok)
+print(",".join(seen))
+' "${1:-}" "${2:-}"
+}
+
+# Ready service_type values from a live environment-agent /providers list.
+# Only status=Ready counts — deploy hints in DCM_EMBEDDED_SPS / AGENT_EMBEDDED_SPS
+# must not be treated as readiness evidence here.
+fetch_ready_embedded_sps() {
+    local url="$1"
+    curl -sf --connect-timeout 2 --max-time 5 "${url}/providers" 2>/dev/null \
+        | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+out = []
+for p in data.get("results") or []:
+    st = (p.get("service_type") or "").strip().lower()
+    status = (p.get("status") or "").lower()
+    if st and status == "ready" and st not in out:
+        out.append(st)
+print(",".join(out))
+' 2>/dev/null || true
+}
+
+# Detect a running agent and union its Ready providers into AGENT_EMBEDDED_SPS
+# even when DCM_EMBEDDED_SPS / --agent-embedded-sps / ENABLE_* were omitted
+# or only listed a subset (Jenkins often passes network,storage alone).
+# LIVE_READY_EMBEDDED_SPS is the Ready-only snapshot for suite enablement.
+LIVE_READY_EMBEDDED_SPS=""
+sync_environment_agent_from_live() {
+    export DCM_AGENT_URL="${DCM_AGENT_URL:-http://localhost:${AGENT_PORT}/api/v1alpha1}"
+    LIVE_READY_EMBEDDED_SPS=""
+    if ! curl -sf --connect-timeout 2 --max-time 5 "${DCM_AGENT_URL}/health" >/dev/null 2>&1; then
+        return 0
+    fi
+    if [[ "${WITH_ENVIRONMENT_AGENT}" != "true" ]]; then
+        WITH_ENVIRONMENT_AGENT=true
+        info "Detected live environment agent at ${DCM_AGENT_URL}"
+    fi
+    LIVE_READY_EMBEDDED_SPS="$(fetch_ready_embedded_sps "${DCM_AGENT_URL}")"
+    if [[ -z "${LIVE_READY_EMBEDDED_SPS}" ]]; then
+        return 0
+    fi
+    info "Live agent Ready providers: ${LIVE_READY_EMBEDDED_SPS}"
+    AGENT_EMBEDDED_SPS="$(merge_embedded_sps "${AGENT_EMBEDDED_SPS}" "${LIVE_READY_EMBEDDED_SPS}")"
+}
+
+live_ready_contains() {
+    local needle="$1"
+    local norm
+    norm="$(printf '%s' "${LIVE_READY_EMBEDDED_SPS}" | tr -d '[:space:]')"
+    case ",${norm}," in
+        *,"${needle}",*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -255,6 +341,19 @@ while [[ $# -gt 0 ]]; do
             CONTROL_PLANE_DIR="$2"
             DEPLOY_ARGS+=("$1" "$2")
             shift 2 ;;
+        --with-environment-agent)
+            WITH_ENVIRONMENT_AGENT=true
+            DEPLOY_ARGS+=("$1")
+            shift ;;
+        --agent-embedded-sps)
+            WITH_ENVIRONMENT_AGENT=true
+            AGENT_EMBEDDED_SPS="$2"
+            DEPLOY_ARGS+=("$1" "$2")
+            shift 2 ;;
+        --agent-port)
+            AGENT_PORT="$2"
+            DEPLOY_ARGS+=("$1" "$2")
+            shift 2 ;;
         --control-plane-branch|--control-plane-repo)
             DEPLOY_ARGS+=("$1" "$2")
             shift 2 ;;
@@ -282,7 +381,7 @@ while [[ $# -gt 0 ]]; do
             ENABLE_KUBEVIRT_SP=true
             DEPLOY_ARGS+=("$1")
             shift ;;
-        --deploy-acm|--deploy-mce)
+        --deploy-acm|--deploy-mce|--deploy-cnv)
             DEPLOY_ARGS+=("$1")
             shift ;;
         --compose-file|--kubeconfig|--k8s-container-namespace|--acm-cluster-namespace|--cluster-api|--cluster-username|--cluster-password|--acm-cluster-sp-repo|--acm-cluster-sp-branch)
@@ -301,6 +400,47 @@ while [[ $# -gt 0 ]]; do
             exit 1 ;;
     esac
 done
+
+if [[ -n "${AGENT_EMBEDDED_SPS}" ]]; then
+    WITH_ENVIRONMENT_AGENT=true
+fi
+# When deploying (not --skip-deploy), agent mode needs an embedded list and
+# must forward agent flags to deploy-dcm.sh (including env-only configuration).
+if [[ "${WITH_ENVIRONMENT_AGENT}" == "true" && "${SKIP_DEPLOY}" == "false" ]]; then
+    if [[ -z "${AGENT_EMBEDDED_SPS}" ]]; then
+        err "--with-environment-agent requires --agent-embedded-sps (or AGENT_EMBEDDED_SPS / DCM_EMBEDDED_SPS) when deploying"
+        exit 1
+    fi
+    # Avoid duplicating flags if the user already passed them on the CLI.
+    if [[ " ${DEPLOY_ARGS[*]} " != *" --with-environment-agent "* ]]; then
+        DEPLOY_ARGS+=(--with-environment-agent)
+    fi
+    if [[ " ${DEPLOY_ARGS[*]} " != *" --agent-embedded-sps "* ]]; then
+        DEPLOY_ARGS+=(--agent-embedded-sps "${AGENT_EMBEDDED_SPS}")
+    fi
+fi
+
+# Resolve the VM namespace used by the embedded provider (SP_VM_NAMESPACE) and
+# by Ginkgo cluster lookups (KUBERNETES_NAMESPACE / KUBEVIRT_VM_NAMESPACE).
+# Must run before deploy so deploy-dcm.sh writes the same value into deploy/.env.
+# kubevirtNamespace() prefers KUBERNETES_NAMESPACE over KUBEVIRT_VM_NAMESPACE, so
+# all three must agree — otherwise the provider creates in one NS and assertions
+# look in another.
+resolve_embedded_vm_namespace() {
+    [[ "${WITH_ENVIRONMENT_AGENT}" == "true" ]] || return 0
+    agent_list_contains vm || return 0
+    local vm_ns="${SP_VM_NAMESPACE:-${KUBEVIRT_VM_NS_ARG:-${KUBEVIRT_VM_NAMESPACE:-default}}}"
+    if [[ -n "${KUBERNETES_NAMESPACE:-}" && "${KUBERNETES_NAMESPACE}" != "${vm_ns}" ]]; then
+        err "KUBERNETES_NAMESPACE=${KUBERNETES_NAMESPACE} conflicts with embedded VM namespace ${vm_ns}"
+        err "Align SP_VM_NAMESPACE / --kubevirt-vm-namespace / KUBEVIRT_VM_NAMESPACE with KUBERNETES_NAMESPACE, or unset KUBERNETES_NAMESPACE"
+        exit 1
+    fi
+    export SP_VM_NAMESPACE="${vm_ns}"
+    export KUBERNETES_NAMESPACE="${vm_ns}"
+    export KUBEVIRT_VM_NAMESPACE="${vm_ns}"
+    info "Embedded VM namespace: SP_VM_NAMESPACE=${SP_VM_NAMESPACE} (lookups: KUBERNETES_NAMESPACE=${KUBERNETES_NAMESPACE})"
+}
+resolve_embedded_vm_namespace
 
 # --- Main ------------------------------------------------------------------ #
 
@@ -541,8 +681,26 @@ if [[ -n "${GATEWAY_URL}" ]]; then
     info "DCM_GATEWAY_URL=${GATEWAY_URL}"
 fi
 
-# Export SP URLs when providers are enabled.
-if [[ "${ENABLE_CONTAINER_SP}" == "true" ]] || [[ "${ENABLE_ACM_CLUSTER_SP}" == "true" ]]; then
+# Probe a live agent after the stack is up so Ready /providers types are known
+# even without DCM_EMBEDDED_SPS, --agent-embedded-sps, or ENABLE_* toggles.
+sync_environment_agent_from_live
+if [[ "${WITH_ENVIRONMENT_AGENT}" == "true" ]]; then
+    # Discovery hint for Ginkgo (deployed/requested embeds). Readiness is decided
+    # by live /providers inside the tests — do not treat this as Ready evidence.
+    export DCM_EMBEDDED_SPS="${AGENT_EMBEDDED_SPS}"
+    info "DCM_AGENT_URL=${DCM_AGENT_URL}"
+    info "DCM_EMBEDDED_SPS=${DCM_EMBEDDED_SPS:-} (discovery hint; Ready=${LIVE_READY_EMBEDDED_SPS:-none})"
+    # Auto-enable the network suite only from live Ready (or an explicit prior set).
+    if [[ "${DCM_NETWORK_SP_ENABLED:-}" == "true" ]] || live_ready_contains network; then
+        export DCM_NETWORK_SP_ENABLED=true
+        info "DCM_NETWORK_SP_ENABLED=true"
+    fi
+    export DCM_NATS_URL="${DCM_NATS_URL:-nats://localhost:4222}"
+    info "DCM_NATS_URL=${DCM_NATS_URL}"
+fi
+
+# Export SP URLs when standalone providers are enabled.
+if [[ "${ENABLE_CONTAINER_SP}" == "true" ]] || [[ "${ENABLE_ACM_CLUSTER_SP}" == "true" ]] || [[ "${ENABLE_KUBEVIRT_SP}" == "true" ]]; then
     export DCM_NATS_URL="${DCM_NATS_URL:-nats://localhost:4222}"
     info "DCM_NATS_URL=${DCM_NATS_URL}"
 fi
@@ -555,14 +713,27 @@ if [[ "${ENABLE_ACM_CLUSTER_SP}" == "true" ]]; then
     info "DCM_ACM_CLUSTER_SP_URL=${DCM_ACM_CLUSTER_SP_URL}"
 fi
 if [[ "${ENABLE_KUBEVIRT_SP}" == "true" ]]; then
-    export DCM_KUBEVIRT_SP_URL="${DCM_KUBEVIRT_SP_URL:-http://localhost:8081/api/v1alpha1}"
-    info "DCM_KUBEVIRT_SP_URL=${DCM_KUBEVIRT_SP_URL}"
+    # Do not default standalone KubeVirt to :8081 when the agent owns that port.
+    if [[ -n "${DCM_KUBEVIRT_SP_URL:-}" ]]; then
+        export DCM_KUBEVIRT_SP_URL
+        info "DCM_KUBEVIRT_SP_URL=${DCM_KUBEVIRT_SP_URL}"
+    elif [[ "${WITH_ENVIRONMENT_AGENT}" == "true" && "${AGENT_PORT}" == "8081" ]]; then
+        info "Standalone KubeVirt SP URL unset; agent owns :${AGENT_PORT} — Ginkgo will use embedded vm capability when present"
+    else
+        export DCM_KUBEVIRT_SP_URL="${DCM_KUBEVIRT_SP_URL:-http://localhost:8081/api/v1alpha1}"
+        info "DCM_KUBEVIRT_SP_URL=${DCM_KUBEVIRT_SP_URL}"
+    fi
     # Keep Ginkgo cluster lookups in the same NS the SP uses (compose KUBERNETES_NAMESPACE).
     if [[ -z "${KUBERNETES_NAMESPACE:-}" ]]; then
         export KUBERNETES_NAMESPACE="${KUBEVIRT_VM_NS_ARG:-${KUBEVIRT_VM_NAMESPACE:-vms}}"
     fi
     export KUBEVIRT_VM_NAMESPACE="${KUBEVIRT_VM_NAMESPACE:-${KUBERNETES_NAMESPACE}}"
     info "KUBERNETES_NAMESPACE=${KUBERNETES_NAMESPACE}"
+fi
+# Agent-embedded vm: keep Ginkgo lookups on the same NS written to SP_VM_NAMESPACE
+# at deploy time (resolve_embedded_vm_namespace). Re-run for --skip-deploy paths.
+if [[ "${WITH_ENVIRONMENT_AGENT}" == "true" ]] && agent_list_contains vm; then
+    resolve_embedded_vm_namespace
 fi
 
 run_ginkgo_suite() {

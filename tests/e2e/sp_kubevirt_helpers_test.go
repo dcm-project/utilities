@@ -21,39 +21,67 @@ import (
 )
 
 var (
-	kubevirtSPURL     string
-	kubevirtSPOnce    sync.Once
-	kubevirtSPSkipped bool
+	kubevirtSPURL           string
+	kubevirtSPOnce          sync.Once
+	kubevirtStandaloneReady bool
 )
 
-// initKubevirtSP initializes the KubeVirt SP URL from env or defaults
+// initKubevirtSP probes the standalone KubeVirt SP HTTP API.
+// Default host port 8081 collides with environment-agent; only treat a URL as
+// the standalone SP when GET /vms/health succeeds (agent exposes /health only).
 func initKubevirtSP() {
 	kubevirtSPOnce.Do(func() {
-		kubevirtSPURL = os.Getenv("DCM_KUBEVIRT_SP_URL")
+		initEnvironmentAgent()
+
+		explicit := os.Getenv("DCM_KUBEVIRT_SP_URL")
+		kubevirtSPURL = explicit
 		if kubevirtSPURL == "" {
 			kubevirtSPURL = "http://localhost:8081/api/v1alpha1"
 		}
+		kubevirtSPURL = strings.TrimRight(kubevirtSPURL, "/")
 
-		// Health lives under /vms/health (same pattern as container/acm SPs)
+		// When the default URL is used and the agent owns :8081, skip the
+		// misleading standalone probe unless the caller set DCM_KUBEVIRT_SP_URL.
+		if explicit == "" && environmentAgentHealthy() && sameHTTPAuthority(kubevirtSPURL, agentBaseURL) {
+			GinkgoWriter.Printf("Skipping default KubeVirt SP URL %s — environment agent is using the same host port\n", kubevirtSPURL)
+			return
+		}
+
 		resp, err := unauthenticatedClient.Get(kubevirtSPURL + "/vms/health")
-		if err != nil || resp.StatusCode != http.StatusOK {
-			GinkgoWriter.Printf("KubeVirt SP not reachable at %s (tests will skip)\n", kubevirtSPURL)
-			kubevirtSPSkipped = true
+		if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
+			GinkgoWriter.Printf("Standalone KubeVirt SP not reachable at %s/vms/health\n", kubevirtSPURL)
 			if resp != nil {
 				resp.Body.Close()
 			}
 			return
 		}
 		resp.Body.Close()
-		GinkgoWriter.Printf("KubeVirt SP available at: %s\n", kubevirtSPURL)
+		kubevirtStandaloneReady = true
+		GinkgoWriter.Printf("Standalone KubeVirt SP ready at %s\n", kubevirtSPURL)
 	})
 }
 
-// requireKubevirtSP skips the test if KubeVirt SP is not available
-func requireKubevirtSP() {
+func sameHTTPAuthority(a, b string) bool {
+	a = strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(a), "https://"), "http://")
+	b = strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(b), "https://"), "http://")
+	aHost, _, _ := strings.Cut(a, "/")
+	bHost, _, _ := strings.Cut(b, "/")
+	return aHost != "" && aHost == bHost
+}
+
+func kubevirtCapabilityAvailable() bool {
 	initKubevirtSP()
-	if kubevirtSPSkipped {
-		Skip("KubeVirt SP not available (deploy with --kubevirt-service-provider; port 8081 published via compose-kubevirt-sp.yaml)")
+	if kubevirtStandaloneReady {
+		return true
+	}
+	return waitForAgentEmbed("vm", 30*time.Second)
+}
+
+// requireKubevirtSP skips unless VM workloads can be provisioned via the
+// control plane (standalone SP or agent-embedded vm).
+func requireKubevirtSP() {
+	if !kubevirtCapabilityAvailable() {
+		Skip("KubeVirt capability not available (standalone --kubevirt-service-provider, or --with-environment-agent embedding vm)")
 	}
 }
 
@@ -71,9 +99,17 @@ func requireNATS() {
 	nc.Close()
 }
 
-// doKubevirtRequest performs HTTP request against the KubeVirt SP
+// doKubevirtRequest talks to the standalone KubeVirt SP when that HTTP API is
+// up; otherwise it uses the control plane / environment-agent for embedded vm.
 func doKubevirtRequest(method, path, payload string) (*http.Response, error) {
-	return doRequestToURL(kubevirtSPURL+path, method, payload)
+	initKubevirtSP()
+	if kubevirtStandaloneReady {
+		return doRequestToURL(kubevirtSPURL+path, method, payload)
+	}
+	if agentEmbeds("vm") {
+		return doEmbeddedKubevirtRequest(method, path, payload)
+	}
+	return nil, fmt.Errorf("kubevirt SP not available")
 }
 
 // createVMPath returns POST /vms?id=<uuid>. The current kubevirt SP panics when
@@ -252,6 +288,10 @@ func kubevirtNamespace() string {
 	}
 	if ns := os.Getenv("KUBEVIRT_NAMESPACE"); ns != "" {
 		return ns
+	}
+	initEnvironmentAgent()
+	if agentEmbeds("vm") {
+		return "default"
 	}
 	return "vms"
 }
@@ -639,11 +679,20 @@ func verifyVMDeleted(vmName, namespace string) error {
 	if err == nil {
 		return fmt.Errorf("VM %s still exists in namespace %s", vmName, namespace)
 	}
-	blob := strings.ToLower(out + " " + err.Error())
-	if strings.Contains(blob, "notfound") || strings.Contains(blob, "not found") {
+	if kubectlNotFound(out, err) {
 		return nil
 	}
 	return fmt.Errorf("failed checking VM %s/%s deleted: %w (%s)", namespace, vmName, err, strings.TrimSpace(out))
+}
+
+// kubectlNotFound is true when kubectl/oc output indicates the object is missing.
+// Other errors (auth, connectivity, timeouts) must not be treated as deletion.
+func kubectlNotFound(out string, err error) bool {
+	if err == nil {
+		return false
+	}
+	blob := strings.ToLower(out + " " + err.Error())
+	return strings.Contains(blob, "notfound") || strings.Contains(blob, "not found")
 }
 
 // checkClusterAccess verifies kubectl/oc connectivity
