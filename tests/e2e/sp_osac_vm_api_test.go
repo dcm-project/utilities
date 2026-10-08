@@ -227,6 +227,19 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 				"max_page_size=0 must return 200 (treat as server default per AEP-132), not %d", resp.StatusCode)
 		})
 
+		It("coerces max_page_size > 100 to the contract maximum", func() {
+			resp, err := doOsacVMRequest(http.MethodGet, "/vms?max_page_size=101", "")
+			Expect(err).NotTo(HaveOccurred())
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusBadGateway {
+				Skip("OSAC backend not reachable (502) — cannot verify max_page_size>100 coercion")
+			}
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+			var page osacVMListResponse
+			decodeJSON(resp, &page)
+			Expect(len(page.Results)).To(BeNumerically("<=", 100))
+		})
+
 	})
 
 	// ------------------------------------------------------------------ #
