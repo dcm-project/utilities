@@ -42,7 +42,11 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 			Eventually(func() int {
 				providers := osacSPProviders()
 				count := 0
-				for _, p := range providers { if p.Name == "osac-sp-cluster" || p.Name == "osac-sp-vm" { count++ } }
+				for _, p := range providers {
+					if p.Name == "osac-sp-cluster" || p.Name == "osac-sp-vm" {
+						count++
+					}
+				}
 				return count
 			}, 30*time.Second, 500*time.Millisecond).Should(Equal(2),
 				"OSAC SP should register exactly osac-sp-cluster and osac-sp-vm")
@@ -50,14 +54,22 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 
 		It("registers a cluster-type provider with name osac-sp-cluster", func() {
 			Eventually(func() string {
-				for _, provider := range osacSPProviders() { if provider.Name == "osac-sp-cluster" && provider.ServiceType == "cluster" { return provider.Endpoint } }
+				for _, provider := range osacSPProviders() {
+					if provider.Name == "osac-sp-cluster" && provider.ServiceType == "cluster" {
+						return provider.Endpoint
+					}
+				}
 				return ""
 			}, 30*time.Second, 500*time.Millisecond).Should(Equal("http://osac-service-provider:8080/api/v1alpha1/clusters"))
 		})
 
 		It("registers a vm-type provider with name osac-sp-vm", func() {
 			Eventually(func() string {
-				for _, provider := range osacSPProviders() { if provider.Name == "osac-sp-vm" && provider.ServiceType == "vm" { return provider.Endpoint } }
+				for _, provider := range osacSPProviders() {
+					if provider.Name == "osac-sp-vm" && provider.ServiceType == "vm" {
+						return provider.Endpoint
+					}
+				}
 				return ""
 			}, 30*time.Second, 500*time.Millisecond).Should(Equal("http://osac-service-provider:8080/api/v1alpha1/vms"))
 		})
@@ -305,17 +317,18 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 				"max_page_size=0 must return 200 (treat as server default per AEP-132), not %d", resp.StatusCode)
 		})
 
-		// Known OSAC SP product gap: FLPATH-4945 tracks enforcement of the DCM/AEP-132
-		// max_page_size limit. Keep this pending until the product fix is deployed.
-		PIt("rejects max_page_size > 100 with 400 (AEP-132)", func() {
+		It("coerces max_page_size > 100 to the contract maximum", func() {
 			resp, err := doOsacClusterRequest(http.MethodGet, "/clusters?max_page_size=101", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusBadGateway {
-				Skip("OSAC backend not reachable (502) — cannot verify max_page_size>100 rejection")
+				Skip("OSAC backend not reachable (502) — cannot verify max_page_size>100 coercion")
 			}
-			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest),
-				"max_page_size > 100 must be rejected per AEP-132")
+			Expect(resp.StatusCode).To(Equal(http.StatusOK),
+				"max_page_size > 100 must be accepted and coerced to 100")
+			var page osacClusterListResponse
+			decodeJSON(resp, &page)
+			Expect(len(page.Results)).To(BeNumerically("<=", 100))
 		})
 
 	})
