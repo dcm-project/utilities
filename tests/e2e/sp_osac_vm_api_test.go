@@ -193,6 +193,18 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 	// ------------------------------------------------------------------ #
 
 	Context("VM list query parameter validation", func() {
+		It("honors simulator default and coerced pagination limits", func() {
+			requireSimulatorScenario("pagination")
+			for path, expected := range map[string]int{"/vms": 50, "/vms?max_page_size=101": 100} {
+				resp, err := doOsacVMRequest(http.MethodGet, path, "")
+				Expect(err).NotTo(HaveOccurred())
+				var page osacVMListResponse
+				decodeJSON(resp, &page)
+				resp.Body.Close()
+				Expect(resp.StatusCode).To(Equal(http.StatusOK))
+				Expect(len(page.Results)).To(Equal(expected))
+			}
+		})
 
 		It("rejects max_page_size=-1 with 400 (negative values always invalid)", func() {
 			resp, err := doOsacVMRequest(http.MethodGet, "/vms?max_page_size=-1", "")

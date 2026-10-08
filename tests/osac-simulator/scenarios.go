@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type scenarioState struct {
@@ -80,10 +82,65 @@ func (s *scenarioState) unary() grpc.UnaryServerInterceptor {
 			return response, err
 		}
 		s.apply(response)
+		if s.name == "pagination" && strings.HasSuffix(info.FullMethod, "/List") {
+			s.applyPagination(req, response)
+		}
 		if s.name == "delete-delayed" && strings.HasSuffix(info.FullMethod, "/List") {
 			s.filterDeleted(response)
 		}
 		return response, nil
+	}
+}
+
+func (s *scenarioState) applyPagination(req interface{}, response interface{}) {
+	limit, offset := int32(50), int32(0)
+	switch r := req.(type) {
+	case *publicv1.ClustersListRequest:
+		if r.Limit != nil && r.GetLimit() > 0 {
+			limit = r.GetLimit()
+		}
+		offset = r.GetOffset()
+	case *publicv1.ComputeInstancesListRequest:
+		if r.Limit != nil && r.GetLimit() > 0 {
+			limit = r.GetLimit()
+		}
+		offset = r.GetOffset()
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	remaining := int32(101) - offset
+	if remaining < 0 {
+		remaining = 0
+	}
+	if limit > remaining {
+		limit = remaining
+	}
+	switch list := response.(type) {
+	case *publicv1.ClustersListResponse:
+		if len(list.Items) == 0 {
+			return
+		}
+		base := list.Items[0]
+		list.Items = nil
+		for i := int32(0); i < limit; i++ {
+			item := proto.Clone(base).(*publicv1.Cluster)
+			item.Id = fmt.Sprintf("sim-cluster-%d", offset+i)
+			list.Items = append(list.Items, item)
+		}
+		list.Size, list.Total = limit, 101
+	case *publicv1.ComputeInstancesListResponse:
+		if len(list.Items) == 0 {
+			return
+		}
+		base := list.Items[0]
+		list.Items = nil
+		for i := int32(0); i < limit; i++ {
+			item := proto.Clone(base).(*publicv1.ComputeInstance)
+			item.Id = fmt.Sprintf("sim-vm-%d", offset+i)
+			list.Items = append(list.Items, item)
+		}
+		list.Size, list.Total = limit, 101
 	}
 }
 

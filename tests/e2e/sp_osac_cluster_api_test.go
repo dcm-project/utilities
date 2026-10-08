@@ -278,6 +278,19 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 	// ------------------------------------------------------------------ #
 
 	Context("cluster list query parameter validation", func() {
+		It("honors simulator default and coerced pagination limits", func() {
+			requireSimulatorScenario("pagination")
+			for path, expected := range map[string]int{"/clusters": 50, "/clusters?max_page_size=101": 100} {
+				resp, err := doOsacClusterRequest(http.MethodGet, path, "")
+				Expect(err).NotTo(HaveOccurred())
+				var page osacClusterListResponse
+				decodeJSON(resp, &page)
+				resp.Body.Close()
+				Expect(resp.StatusCode).To(Equal(http.StatusOK))
+				Expect(len(page.Results)).To(Equal(expected))
+				Expect(page.NextPageToken).NotTo(BeEmpty())
+			}
+		})
 
 		It("rejects max_page_size=-1 with 400 (negative values always invalid)", func() {
 			resp, err := doOsacClusterRequest(http.MethodGet, "/clusters?max_page_size=-1", "")
