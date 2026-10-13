@@ -509,14 +509,7 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 		})
 
 		It("deleted VM no longer appears in the list", func() {
-			resp, err := doOsacVMRequest(http.MethodGet, "/vms", "")
-			Expect(err).NotTo(HaveOccurred())
-			defer resp.Body.Close()
-			Expect(resp.StatusCode).To(Equal(http.StatusOK))
-
-			var listResp osacVMListResponse
-			decodeJSON(resp, &listResp)
-			for _, vm := range listResp.Results {
+			for _, vm := range listAllOsacVMs() {
 				Expect(vm.ID).NotTo(Equal(vmID),
 					"deleted VM %s must not appear in the list", vmID)
 			}
