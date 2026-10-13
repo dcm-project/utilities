@@ -421,7 +421,7 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 			// SPs which return 404 on non-existent delete.
 			// Use a UUID-format ID so OSAC does not reject it as malformed.
 			resp, err := doOsacClusterRequest(http.MethodDelete,
-				"/clusters/00000000-e2e0-4000-8000-delete0cl0000", "")
+				"/clusters/00000000-e2e0-4000-8000-de1e7e000001", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusBadGateway {
