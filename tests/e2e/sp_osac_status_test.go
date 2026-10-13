@@ -125,7 +125,7 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 	// drains messages until a matching VM ID is found.
 	// ------------------------------------------------------------------ #
 
-	Context("VM status events", Label("cluster"), func() {
+	Context("VM status events", Label("vm"), func() {
 
 		It("publishes a CloudEvent on dcm.vm when a VM is created", func() {
 			if os.Getenv("OSAC_E2E_VM_TEMPLATE_ID") == "" {
