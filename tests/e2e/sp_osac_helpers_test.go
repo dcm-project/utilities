@@ -161,7 +161,29 @@ type osacVM struct {
 
 // osacVMListResponse is the body returned by GET /vms (AEP-132: results[] key).
 type osacVMListResponse struct {
-	Results []osacVM `json:"results"`
+	Results       []osacVM `json:"results"`
+	NextPageToken string   `json:"next_page_token,omitempty"`
+}
+
+func listAllOsacVMs() []osacVM {
+	var all []osacVM
+	token := ""
+	for {
+		path := "/vms?max_page_size=100"
+		if token != "" {
+			path += "&page_token=" + url.QueryEscape(token)
+		}
+		resp, err := doOsacVMRequest(http.MethodGet, path, "")
+		Expect(err).NotTo(HaveOccurred())
+		var page osacVMListResponse
+		decodeJSON(resp, &page)
+		resp.Body.Close()
+		all = append(all, page.Results...)
+		if page.NextPageToken == "" {
+			return all
+		}
+		token = page.NextPageToken
+	}
 }
 
 // envAgentProvider is a single entry from GET /providers on the environment-agent.
