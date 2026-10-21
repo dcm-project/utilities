@@ -22,12 +22,11 @@ import (
 // plane (catalog → agent). OpenAPI-specific SP contract tests still skip.
 
 var (
-	embeddedCatalogMu       sync.Mutex
+	embeddedCatalogMu sync.Mutex
 	// embeddedCreateResolveMu serializes snapshot→POST→resolve so concurrent
 	// embedded creates cannot share the same global before/after STI diff.
 	embeddedCreateResolveMu sync.Mutex
 	embeddedCatalogItem     = map[string]string{} // serviceType → catalog item uid (created by this run)
-	embeddedCatalogPol      = map[string]string{} // serviceType → policy id (created or reused)
 	embeddedCreatedPolicies = map[string]bool{}   // policy ids this run created (not reused)
 	embeddedSTIToInst       = map[string]string{} // service-type-instance id → catalog-item-instance uid
 	embeddedAgentSeenAt     = time.Now()
@@ -222,7 +221,6 @@ func ensureEmbeddedCatalogRoute(serviceType string) (catalogItemID, agentName st
 		polID, createdPolicy = createEmbeddedRoutingPolicy(serviceType, agentName)
 	}
 	Expect(polID).NotTo(BeEmpty(), "need a GLOBAL routing policy for embedded %s (agent %s)", serviceType, agentName)
-	embeddedCatalogPol[serviceType] = polID
 	if createdPolicy {
 		embeddedCreatedPolicies[polID] = true
 	}
@@ -231,15 +229,17 @@ func ensureEmbeddedCatalogRoute(serviceType string) (catalogItemID, agentName st
 	var catPayload string
 	switch serviceType {
 	case "vm":
+		// guest_os/vcpu/memory/storage are editable so userValuesFromVMSpec
+		// can override the defaults with the posted spec.
 		catPayload = fmt.Sprintf(`{
 			"api_version": "v1alpha1",
 			"display_name": %q,
 			"spec": {"resources": [{"name": "main", "service_type": "vm", "fields": [
 				{"path": "metadata.name", "display_name": "Name", "editable": true, "default": %q},
 				{"path": "guest_os.type", "editable": true, "default": "linux"},
-				{"path": "vcpu.count", "editable": false, "default": 1},
-				{"path": "memory.size", "editable": false, "default": "1GB"},
-				{"path": "storage.disks", "editable": false, "default": [{"name":"boot","capacity":"10GB"}]}
+				{"path": "vcpu.count", "editable": true, "default": 1},
+				{"path": "memory.size", "editable": true, "default": "1GB"},
+				{"path": "storage.disks", "editable": true, "default": [{"name":"boot","capacity":"10GB"}]}
 			]}]}
 		}`, catName, catName)
 	case "cluster":
@@ -251,16 +251,18 @@ func ensureEmbeddedCatalogRoute(serviceType string) (catalogItemID, agentName st
 			]}]}
 		}`, catName, catName)
 	default:
+		// resources.* are editable so userValuesFromContainerSpec can override
+		// the defaults with the posted spec.
 		catPayload = fmt.Sprintf(`{
 			"api_version": "v1alpha1",
 			"display_name": %q,
 			"spec": {"resources": [{"name": "main", "service_type": "container", "fields": [
 				{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
 				{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
-				{"path": "resources.cpu.min", "editable": false, "default": "1"},
-				{"path": "resources.cpu.max", "editable": false, "default": "1"},
-				{"path": "resources.memory.min", "editable": false, "default": "128MB"},
-				{"path": "resources.memory.max", "editable": false, "default": "256MB"}
+				{"path": "resources.cpu.min", "editable": true, "default": "1"},
+				{"path": "resources.cpu.max", "editable": true, "default": "1"},
+				{"path": "resources.memory.min", "editable": true, "default": "128MB"},
+				{"path": "resources.memory.max", "editable": true, "default": "256MB"}
 			]}]}
 		}`, catName, catName)
 	}
@@ -349,7 +351,6 @@ func cleanupEmbeddedCatalogRoutes() {
 	embeddedCatalogMu.Lock()
 	embeddedSTIToInst = map[string]string{}
 	embeddedCatalogItem = map[string]string{}
-	embeddedCatalogPol = map[string]string{}
 	embeddedCreatedPolicies = map[string]bool{}
 	embeddedCatalogMu.Unlock()
 }
@@ -483,6 +484,28 @@ func embeddedHealthPayload(serviceType string) map[string]interface{} {
 	}
 }
 
+// appendUserValue appends a catalog user_value unless val is empty (nil,
+// empty string, or empty slice). Values of other types pass through as-is.
+func appendUserValue(values []map[string]interface{}, path string, val interface{}) []map[string]interface{} {
+	switch v := val.(type) {
+	case nil:
+		return values
+	case string:
+		if v == "" {
+			return values
+		}
+	case []interface{}:
+		if len(v) == 0 {
+			return values
+		}
+	}
+	return append(values, map[string]interface{}{"path": path, "value": val, "resource": "main"})
+}
+
+// userValuesFrom* forward the posted spec into catalog user_values so
+// embedded creates exercise the posted fields, not the catalog-item
+// defaults (the fields they override are editable in the embedded catalog
+// items; see ensureEmbeddedCatalogRoute).
 func userValuesFromContainerSpec(spec map[string]interface{}) (displayName string, values []map[string]interface{}) {
 	displayName = uniqueName("e2e-embed-ctr")
 	image := "docker.io/library/nginx:alpine"
@@ -500,6 +523,14 @@ func userValuesFromContainerSpec(spec map[string]interface{}) (displayName strin
 		{"path": "metadata.name", "value": displayName, "resource": "main"},
 		{"path": "image.reference", "value": image, "resource": "main"},
 	}
+	if res, ok := spec["resources"].(map[string]interface{}); ok {
+		cpu, _ := res["cpu"].(map[string]interface{})
+		memory, _ := res["memory"].(map[string]interface{})
+		for _, bound := range []string{"min", "max"} {
+			values = appendUserValue(values, "resources.cpu."+bound, cpu[bound])
+			values = appendUserValue(values, "resources.memory."+bound, memory[bound])
+		}
+	}
 	return displayName, values
 }
 
@@ -512,6 +543,18 @@ func userValuesFromVMSpec(spec map[string]interface{}) (displayName string, valu
 	}
 	values = []map[string]interface{}{
 		{"path": "metadata.name", "value": displayName, "resource": "main"},
+	}
+	if guestOS, ok := spec["guest_os"].(map[string]interface{}); ok {
+		values = appendUserValue(values, "guest_os.type", guestOS["type"])
+	}
+	if vcpu, ok := spec["vcpu"].(map[string]interface{}); ok {
+		values = appendUserValue(values, "vcpu.count", vcpu["count"])
+	}
+	if mem, ok := spec["memory"].(map[string]interface{}); ok {
+		values = appendUserValue(values, "memory.size", mem["size"])
+	}
+	if storage, ok := spec["storage"].(map[string]interface{}); ok {
+		values = appendUserValue(values, "storage.disks", storage["disks"])
 	}
 	return displayName, values
 }
@@ -547,6 +590,9 @@ func doEmbeddedContainerSPRequest(method, path, body string) (*http.Response, er
 		return jsonHTTPResponse(http.StatusOK, payload)
 	case method == http.MethodPost && strings.TrimSuffix(clean, "/") == "/containers":
 		spec := parseSpecBody(body)
+		// The 400s below are adapter-fabricated guards, not the container SP's
+		// OpenAPI validation — contract specs for invalid bodies are gated to
+		// the standalone SP via skipUnlessDirectContainerSP().
 		if spec == nil {
 			return jsonHTTPResponse(http.StatusBadRequest, map[string]interface{}{"title": "invalid argument"})
 		}
@@ -619,6 +665,8 @@ func doEmbeddedKubevirtRequest(method, path, payload string) (*http.Response, er
 		return jsonHTTPResponse(http.StatusOK, h)
 	case method == http.MethodPost && strings.TrimSuffix(clean, "/") == "/vms":
 		spec := parseSpecBody(payload)
+		// Adapter-fabricated guard, not the KubeVirt SP's OpenAPI validation
+		// (see the Validation context in sp_kubevirt_api_test.go).
 		if spec == nil {
 			return jsonHTTPResponse(http.StatusBadRequest, map[string]interface{}{"title": "invalid argument"})
 		}
@@ -695,6 +743,9 @@ func doEmbeddedAcmClusterSPRequest(method, path, body string) (*http.Response, e
 		return jsonHTTPResponse(http.StatusOK, h)
 	case method == http.MethodPost && strings.TrimSuffix(clean, "/") == "/clusters":
 		spec := parseSpecBody(body)
+		// Adapter-fabricated guard, not the ACM Cluster SP's OpenAPI
+		// validation (see the input validation context in
+		// sp_acm_cluster_api_test.go).
 		if spec == nil {
 			return jsonHTTPResponse(http.StatusBadRequest, map[string]interface{}{"title": "invalid argument"})
 		}

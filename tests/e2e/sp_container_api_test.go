@@ -231,7 +231,14 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 		})
 	})
 
+	// OpenAPI validation is a standalone-SP contract. In embedded mode the
+	// adapter fabricates these 400s (sp_embedded_http_test.go), so these specs
+	// must not run there.
 	Context("validation errors", func() {
+		BeforeEach(func() {
+			skipUnlessDirectContainerSP()
+		})
+
 		It("rejects an empty body", func() {
 			resp, err := doContainerSPRequest(http.MethodPost, "/containers", "")
 			Expect(err).NotTo(HaveOccurred())
@@ -254,7 +261,6 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 		})
 
 		It("rejects wrong content type", func() {
-			skipUnlessDirectContainerSP()
 			url := containerSPBaseURL + "/containers"
 			req, err := http.NewRequest(http.MethodPost, url, nil)
 			Expect(err).NotTo(HaveOccurred())

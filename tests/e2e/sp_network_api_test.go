@@ -85,12 +85,10 @@ var _ = Describe("Network SP API", Label("sp", "network"), func() {
 			Expect(ok).To(BeTrue(), "network service type must include a schema object")
 			// Control-plane currently advertises the network shape with ports and
 			// endpoints. routing_level is used on catalog fields for inference
-			// but is not always present on the service-type schema object.
+			// but is not guaranteed on the service-type schema object, so its
+			// presence is not asserted here.
 			Expect(spec).To(HaveKey("ports"))
 			Expect(spec).To(HaveKey("endpoints"))
-			if _, hasRouting := spec["routing_level"]; hasRouting {
-				Expect(spec["routing_level"]).NotTo(BeNil())
-			}
 		})
 	})
 

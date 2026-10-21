@@ -252,6 +252,9 @@ func resolveResourceIDAfterCreate(body map[string]interface{}, before map[string
 
 // resourceIDFromRun tries GET /runs/{runID} for an instance-specific resource
 // association. Returns false when the gateway does not expose runs (common).
+// Every e2e catalog item is single-resource, so the first resource id wins;
+// a run reporting more than one logs a warning so a future multi-resource
+// item cannot silently mis-resolve.
 func resourceIDFromRun(runID string) (string, bool) {
 	if runID == "" {
 		return "", false
@@ -271,6 +274,10 @@ func resourceIDFromRun(runID string) (string, bool) {
 		return "", false
 	}
 	resources, _ := run["resources"].([]interface{})
+	if len(resources) > 1 {
+		GinkgoWriter.Printf("Warning: run %s reported %d resources; resolving the first "+
+			"(first-resource resolution is unsafe for multi-resource catalog items)\n", runID, len(resources))
+	}
 	for _, raw := range resources {
 		r, ok := raw.(map[string]interface{})
 		if !ok {
@@ -290,7 +297,7 @@ func resourceIDFromRun(runID string) (string, bool) {
 			defer stiResp.Body.Close()
 			_, _ = io.ReadAll(stiResp.Body)
 			return stiResp.StatusCode
-		}).WithTimeout(60 * time.Second).WithPolling(2 * time.Second).Should(Equal(http.StatusOK),
+		}).WithTimeout(60*time.Second).WithPolling(2*time.Second).Should(Equal(http.StatusOK),
 			"placement run %s resource %s did not appear as a service-type-instance", runID, id)
 		return id, true
 	}
