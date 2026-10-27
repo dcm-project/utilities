@@ -19,7 +19,7 @@ import (
 // This suite deliberately implements only the checkpoints that can be proven
 // without assuming Agent, BMH, or AAP behavior. TBP-040 and TBP-050 remain
 // discovery outputs until a stable linkage is observed in this environment.
-var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "tier-b-dispatch", "cluster"), Ordered, func() {
+var _ = Describe("OSAC SP — Tier B++ dispatch discovery", Label("sp", "osac", "tier-b-dispatch", "cluster"), Ordered, func() {
 	var (
 		clusterID     string
 		clusterName   string
@@ -86,13 +86,7 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 		decodeJSON(resp, &got)
 		Expect(got.ID).To(Equal(clusterID), "GET must return the exact created ID")
 
-		resp, err = doOsacClusterRequest(http.MethodGet, "/clusters", "")
-		Expect(err).NotTo(HaveOccurred())
-		defer resp.Body.Close()
-		Expect(resp.StatusCode).To(Equal(http.StatusOK))
-		var list osacClusterListResponse
-		decodeJSON(resp, &list)
-		Expect(list.Results).To(ContainElement(HaveField("ID", clusterID)),
+		Expect(listAllOsacClusters()).To(ContainElement(HaveField("ID", clusterID)),
 			"list must contain the exact created ID")
 
 		deadline := time.Now().Add(2 * time.Minute)
@@ -120,7 +114,7 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 				if _, existed := beforeOrders[key]; existed {
 					continue
 				}
-				if osacObjectReferencesID(order, clusterID) {
+				if osacClusterOrderReferencesID(order, clusterID) {
 					clusterOrder = order
 					return nil
 				}
@@ -129,8 +123,8 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 		}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
 
 		Expect(clusterOrder).NotTo(BeNil())
-		Expect(osacObjectReferencesID(clusterOrder, clusterID)).To(BeTrue(),
-			"ClusterOrder must carry a stable label, annotation, owner reference, or spec reference to the exact SP ID")
+		Expect(osacClusterOrderReferencesID(clusterOrder, clusterID)).To(BeTrue(),
+			"ClusterOrder must carry the exact osac.openshift.io/clusterorder-uuid label")
 		templateID, found := nestedString(clusterOrder, "spec", "templateID")
 		Expect(found).To(BeTrue(), "linked ClusterOrder must expose the translated templateID")
 		Expect(templateID).To(Equal(osacTemplateID()),
@@ -171,25 +165,17 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 		if os.Getenv("OSAC_AAP_MODE") == "real" {
 			Expect(osacConditionMatches(conditions, "NamespaceCreated", "True", ""))
 			Expect(osacConditionMatches(conditions, "Progressing", "True", "PreparingInfrastructure"))
-		}
-		if os.Getenv("OSAC_AAP_MODE") == "real" {
-			jobs, found := nestedSlice(clusterOrder, "status", "provisioningJobs")
-			Expect(found).To(BeTrue(), "real-AAP ClusterOrder must record provisioning job history")
-			Expect(jobs).NotTo(BeEmpty(), "real-AAP ClusterOrder must record the linked job ID")
-			for _, raw := range jobs {
-				job, ok := raw.(map[string]interface{})
-				Expect(ok).To(BeTrue(), "provisioning job history entries must be objects")
-				jobID, hasID := job["id"].(string)
-				if !hasID {
-					jobID, hasID = job["jobID"].(string)
+			Eventually(func() error {
+				current, err := osacGetClusterOrder(name, namespace)
+				if err != nil {
+					return err
 				}
-				Expect(hasID && jobID != "").To(BeTrue(), "provisioning job history must contain an AAP job ID")
-				state, hasState := job["state"].(string)
-				if !hasState {
-					state, hasState = job["currentState"].(string)
+				clusterOrder = current
+				if !osacProvisioningJobSucceeded(current) {
+					return fmt.Errorf("ClusterOrder %s has no successful AAP provisioning job yet", name)
 				}
-				Expect(hasState && state != "").To(BeTrue(), "provisioning job history must contain state")
-			}
+				return nil
+			}).WithTimeout(3 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
 		}
 
 		resp, err := doOsacClusterRequest(http.MethodGet, "/clusters/"+clusterID, "")
@@ -226,6 +212,37 @@ func osacConditionMatches(conditions []interface{}, conditionType, status, reaso
 			return true
 		}
 		return condition["reason"] == reason
+	}
+	return false
+}
+
+func osacClusterOrderReferencesID(order map[string]interface{}, id string) bool {
+	linkedID, found := nestedString(order, "metadata", "labels", "osac.openshift.io/clusterorder-uuid")
+	return found && linkedID == id
+}
+
+func osacProvisioningJobSucceeded(order map[string]interface{}) bool {
+	jobs, found := nestedSlice(order, "status", "provisioningJobs")
+	if !found {
+		return false
+	}
+	for _, raw := range jobs {
+		job, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		jobID, _ := job["id"].(string)
+		if jobID == "" {
+			jobID, _ = job["jobID"].(string)
+		}
+		state, _ := job["state"].(string)
+		if state == "" {
+			state, _ = job["currentState"].(string)
+		}
+		state = strings.ToUpper(state)
+		if jobID != "" && (state == "SUCCESSFUL" || state == "SUCCEEDED") {
+			return true
+		}
 	}
 	return false
 }

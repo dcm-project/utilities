@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -45,15 +46,15 @@ var _ = Describe("OSAC external-provider path", Label("osac", "external-provider
 		Expect(instance.UID).NotTo(BeEmpty())
 		Expect(instance.ResourceIDs).NotTo(BeEmpty(), "external placement must return a resource ID")
 
-		defer func() {
+		DeferCleanup(func() {
 			cleanup, cleanupErr := doRequest(http.MethodDelete, "/catalog-item-instances/"+instance.UID, "")
-			if cleanupErr == nil && cleanup != nil {
-				cleanup.Body.Close()
-			}
-		}()
+			Expect(cleanupErr).NotTo(HaveOccurred(), "delete external OSAC catalog instance")
+			defer cleanup.Body.Close()
+			Expect(cleanup.StatusCode).To(SatisfyAny(Equal(http.StatusOK), Equal(http.StatusAccepted), Equal(http.StatusNoContent)))
+		})
 
 		resourceID := instance.ResourceIDs[0]
-		Eventually(func() string {
+		readStatus := func() string {
 			statusResp, statusErr := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
 			if statusErr != nil {
 				return ""
@@ -68,8 +69,11 @@ var _ = Describe("OSAC external-provider path", Label("osac", "external-provider
 			if json.NewDecoder(statusResp.Body).Decode(&status) != nil {
 				return ""
 			}
-			return status.Status
-		}, 30*time.Second, time.Second).ShouldNot(Equal("FAILED"),
+			return strings.ToUpper(status.Status)
+		}
+		Eventually(readStatus, 30*time.Second, time.Second).ShouldNot(BeEmpty(),
+			"external OSAC placement must expose a service-type-instance status")
+		Consistently(readStatus, 15*time.Second, time.Second).ShouldNot(Equal("FAILED"),
 			"external OSAC placement must not fail immediately due to provider request shape")
 	})
 })
