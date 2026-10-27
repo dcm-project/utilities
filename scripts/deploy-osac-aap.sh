@@ -206,7 +206,11 @@ oc wait --for=condition=Available deployment/osac-aap-platform-gateway \
 
 gateway_service="osac-aap-platform"
 port_forward_pid=""
-cleanup_port_forward() { [[ -z "${port_forward_pid}" ]] || kill "${port_forward_pid}" 2>/dev/null || true; }
+aap_values_file=""
+cleanup_port_forward() {
+    [[ -z "${port_forward_pid}" ]] || kill "${port_forward_pid}" 2>/dev/null || true
+    [[ -z "${aap_values_file}" ]] || rm -f "${aap_values_file}"
+}
 trap cleanup_port_forward EXIT
 if ! lsof -nP -iTCP:"${AAP_API_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
     oc port-forward --address 127.0.0.1 -n "${AAP_NAMESPACE}" service/${gateway_service} "${AAP_API_PORT}:80" >/tmp/osac-aap-port-forward.log 2>&1 &
@@ -301,10 +305,16 @@ info "OSAC real AAP templates ready (create=${template_id}, delete=${delete_temp
 # otherwise --reuse-values can retain an empty valueFrom alongside the new value.
 oc set env deployment/osac-operator -n "${OSAC_NAMESPACE}" OSAC_CLUSTER_ORDER_NAMESPACE- \
     >/dev/null 2>&1 || true
+aap_values_file="$(mktemp)"
+chmod 600 "${aap_values_file}"
+jq -n --arg url "http://osac-aap-platform.${AAP_NAMESPACE}.svc.cluster.local/api/controller" \
+    --arg token "${gateway_pat}" \
+    '{aap:{url:$url,token:$token,insecureSkipVerify:true}}' > "${aap_values_file}"
 helm upgrade osac-operator oci://ghcr.io/osac-project/charts/osac-operator \
     --version "${OSAC_OPERATOR_CHART_VERSION:-0.0.18}" --namespace "${OSAC_NAMESPACE}" \
-    --reuse-values --set-string aap.url="http://osac-aap-platform.${AAP_NAMESPACE}.svc.cluster.local/api/controller" \
-    --set-string aap.token="${gateway_pat}" --set-string aap.insecureSkipVerify=true >/dev/null
+    --reuse-values --values "${aap_values_file}" >/dev/null
+rm -f "${aap_values_file}"
+aap_values_file=""
 oc set env deployment/osac-operator -n "${OSAC_NAMESPACE}" \
     OSAC_CLUSTER_ORDER_NAMESPACE="${OSAC_CLUSTER_ORDER_NAMESPACE}"
 oc rollout status deployment/osac-operator -n "${OSAC_NAMESPACE}" --timeout=3m
