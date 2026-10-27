@@ -52,6 +52,8 @@ Service provider flags (forwarded to deploy-dcm.sh):
   --k8s-storage-service-provider    Enable the k8s storage SP
   --kubevirt-service-provider       Enable the kubevirt SP
   --acm-cluster-service-provider    Enable the ACM cluster SP
+  --environment-agent               Enable the environment agent (required for OSAC SP)
+  --osac-service-provider           Enable the OSAC SP (requires --environment-agent and OSAC credentials)
   --deploy-acm                      Deploy ACM on the cluster (opt-in, heavy)
   --deploy-mce                      Deploy MCE on the cluster (opt-in, heavy)
   --kubeconfig PATH                 Path to kubeconfig file
@@ -81,6 +83,14 @@ Environment variables:
   DCM_AUTH_PASSWORD        OIDC password for password-grant tokens
   DCM_AUTH_TOKEN           Optional static bearer token (avoids password grant)
   DCM_AUTH_CA_FILE         Optional CA bundle for the OIDC issuer
+  DCM_CONTAINER_SP_URL       Container SP direct URL (default: http://localhost:8082/api/v1alpha1)
+  DCM_STORAGE_SP_URL         Storage SP direct URL (default: http://localhost:8089/api/v1alpha1)
+  DCM_ACM_CLUSTER_SP_URL     ACM Cluster SP direct URL (default: http://localhost:8083/api/v1alpha1)
+  DCM_KUBEVIRT_SP_URL        KubeVirt SP direct URL (default: http://localhost:8081/api/v1alpha1)
+  DCM_OSAC_SP_URL            OSAC SP direct URL (default: http://localhost:8091/api/v1alpha1)
+  DCM_ENVIRONMENT_AGENT_URL  Environment agent API URL (default: http://localhost:8090/api/v1alpha1)
+  DCM_NATS_URL               NATS URL for event tests (default: nats://localhost:4222)
+  DCM_GATEWAY_URL            Control plane API URL (default: http://localhost:8080/api/v1alpha1)
   DCM_AUTH_RESTART_COMMAND Command used by TC-42 to restart the auth provider
   DCM_AUTH_PROXY_URL       RHDH DCM proxy URL for TC-43
   DCM_AUTH_PROXY_SESSION_TOKEN  Valid RHDH session token for TC-43
@@ -280,6 +290,12 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         --kubevirt-service-provider)
             ENABLE_KUBEVIRT_SP=true
+            DEPLOY_ARGS+=("$1")
+            shift ;;
+        --environment-agent)
+            DEPLOY_ARGS+=("$1")
+            shift ;;
+        --osac-service-provider)
             DEPLOY_ARGS+=("$1")
             shift ;;
         --deploy-acm|--deploy-mce)

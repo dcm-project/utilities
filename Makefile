@@ -1,4 +1,4 @@
-.PHONY: help e2e-up test-e2e test-smoke test-cli test-sp test-acm-sp test-kubevirt-sp test-core test-rehydration test-rehydration-safe test-rehydration-cli e2e-down test-e2e-full download-cli cli-version lint
+.PHONY: help e2e-up test-e2e test-smoke test-cli test-sp test-acm-sp test-kubevirt-sp test-osac-sp test-core test-rehydration test-rehydration-safe test-rehydration-cli e2e-down test-e2e-full download-cli cli-version lint
 
 # Set JUNIT_REPORT to a filename to produce JUnit XML output.
 # Example: make test-e2e JUNIT_REPORT=results.xml
@@ -14,6 +14,24 @@ help: ## Show all available targets
 
 e2e-up: ## Deploy the full DCM stack
 	./scripts/deploy-dcm.sh
+
+deploy-osac-backend: ## Deploy OSAC fulfillment-service backend on OCP (for OSAC SP E2E tests)
+	./scripts/deploy-osac-backend.sh --allow-tierb-credentials
+
+teardown-osac-backend: ## Remove the OSAC backend from OCP
+	./scripts/deploy-osac-backend.sh --tear-down
+
+port-forward-osac: ## Mac/Darwin: tunnel OSAC backend via oc port-forward (8443=Keycloak, 19443=gRPC)
+	@echo "==> Starting OSAC backend port-forwards (launchd-managed auto-restart)"
+	@bash scripts/osac-port-forward.sh
+	@sleep 3
+	@lsof -i :8443 -sTCP:LISTEN | grep -q . && echo "    Keycloak  OK (8443)" || echo "    Keycloak  FAILED — check /tmp/pf-ffs-keycloak.log"
+	@lsof -i :19443 -sTCP:LISTEN | grep -q . && echo "    gRPC      OK (19443)" || echo "    gRPC      FAILED — check /tmp/pf-fulfillment-grpc-server.log"
+	@echo "==> Port-forwards running (launchd restart loop). Now deploy:"
+	@echo "    ./scripts/deploy-dcm.sh --environment-agent --osac-service-provider"
+
+stop-port-forward-osac: ## Stop OSAC backend port-forwards started by port-forward-osac
+	@bash scripts/osac-port-forward.sh --stop
 
 test-e2e: ## Run all E2E tests (stack must be running)
 	cd tests/e2e && $(GINKGO_BASE) .
@@ -32,6 +50,9 @@ test-acm-sp: ## Run ACM cluster SP tests only
 
 test-kubevirt-sp: ## Run KubeVirt SP tests only (KubeVirt cluster required)
 	cd tests/e2e && $(GINKGO_BASE) --label-filter=kubevirt .
+
+test-osac-sp: ## Run OSAC SP tests only (--environment-agent --osac-service-provider required)
+	cd tests/e2e && $(GINKGO_BASE) --label-filter=osac .
 
 test-core: ## Run core platform tests (full control plane provisioning flow)
 	cd tests/e2e && $(GINKGO_BASE) --label-filter=core .
@@ -61,6 +82,7 @@ cli-version: ## Write DCM CLI version info to JSON file
 	@DCM_BIN="$${DCM_CLI_PATH:-}"; if [[ -z "$$DCM_BIN" ]]; then if command -v dcm &>/dev/null; then DCM_BIN="$$(command -v dcm)"; elif [[ -x bin/dcm ]]; then DCM_BIN="bin/dcm"; else echo "ERROR: dcm binary not found (set DCM_CLI_PATH or run make download-cli)"; exit 1; fi; fi; RAW="$$("$$DCM_BIN" version 2>&1)"; echo "$$RAW" | awk '/^dcm version/{v=$$0; sub(/^dcm version /,"",v)} /commit:/{sub(/^ *commit: */,""); c=$$0} /built:/{sub(/^ *built: */,""); b=$$0} /go:/{sub(/^ *go: */,""); g=$$0} END{printf "{\"version\":\"%s\",\"commit\":\"%s\",\"built\":\"%s\",\"go\":\"%s\"}\n",v,c,b,g}' | jq . > $(CLI_VERSION_FILE); echo "==> Wrote $(CLI_VERSION_FILE)"; cat $(CLI_VERSION_FILE)
 
 SHELL_SCRIPTS = scripts/*.sh scripts/kind/*.sh scripts/compose/*.sh scripts/kubevirt/*.sh tests/*.sh
+.PHONY: deploy-osac-backend teardown-osac-backend port-forward-osac stop-port-forward-osac
 SHELLCHECK_BIN := $(shell command -v shellcheck 2>/dev/null)
 ifeq ($(SHELLCHECK_BIN),)
 CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
