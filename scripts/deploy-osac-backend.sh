@@ -30,7 +30,7 @@
 # Prerequisites:
 #   oc       — logged in to the target OCP cluster (run oc_login_auto first)
 #   helm     — v3.8+ for OCI registry support
-#   yq, curl, jq — standard utilities
+#   yq, curl, jq, openssl — standard utilities
 #
 # See .cursor/prompts/deploy-osac-backend.md for the full runbook.
 
@@ -42,6 +42,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
 readonly MANIFESTS_DIR="${REPO_ROOT}/tests/osac-backend"
 readonly DEPLOY_DIR="${REPO_ROOT}/deploy"
+# shellcheck source=scripts/osac-ca.sh
+source "${SCRIPT_DIR}/osac-ca.sh"
 
 # --- Defaults ----------------------------------------------------------------
 
@@ -59,6 +61,7 @@ TEAR_DOWN=false
 ALLOW_TIERB_CREDENTIALS=false
 SKIP_CERT_MANAGER=false
 SKIP_PHASE2=false
+OSAC_AAP_MODE="${OSAC_AAP_MODE:-mock}"
 
 # --- Logging -----------------------------------------------------------------
 
@@ -82,7 +85,8 @@ Options:
   --skip-phase2               Skip Phase 2 components (osac-operator, BMFO, aap-mock, fixtures)
                               Phase 2 allows clusters to advance beyond PROGRESSING; chart 0.0.18+
                               (proto-compatible with fulfillment-service 0.0.107, OSAC-2928).
-                              Full ACTIVE delivery (kubeconfig) requires Tier C (real Agents).
+                               Full ACTIVE delivery (kubeconfig) requires Tier C (real Agents).
+  --aap-mode MODE             AAP backend mode: mock (default) or real
   --help                      Show this help message
 
 Environment variables:
@@ -110,13 +114,22 @@ while [[ $# -gt 0 ]]; do
         --chart-version)       FULFILLMENT_SERVICE_CHART_VERSION="$2"; shift 2 ;;
         --skip-cert-manager)   SKIP_CERT_MANAGER=true; shift ;;
         --skip-phase2)         SKIP_PHASE2=true; shift ;;
+        --aap-mode)             OSAC_AAP_MODE="$2"; shift 2 ;;
         --help)                usage; exit 0 ;;
         *)                     err "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
+if [[ "${OSAC_AAP_MODE}" != "mock" && "${OSAC_AAP_MODE}" != "real" ]]; then
+    err "--aap-mode must be mock or real"
+    exit 1
+fi
+
 readonly NS="${OSAC_BACKEND_NAMESPACE}"
 
+if [[ "${TEAR_DOWN}" == true && "${OSAC_AAP_MODE}" == "real" ]]; then
+    OSAC_BACKEND_NAMESPACE="${NS}" bash "${SCRIPT_DIR}/deploy-osac-aap.sh" --tear-down
+fi
 if [[ "${TEAR_DOWN}" != true && "${ALLOW_TIERB_CREDENTIALS}" != true ]]; then
     err "This deployment uses committed Tier B test credentials. Re-run with --allow-tierb-credentials only in a disposable test environment."
     exit 1
@@ -131,6 +144,9 @@ check_tools() {
     for tool in oc helm curl jq python3; do
         command -v "${tool}" &>/dev/null || missing+=("${tool}")
     done
+    if [[ "${TEAR_DOWN}" != true ]] && ! command -v openssl &>/dev/null; then
+        missing+=(openssl)
+    fi
     # Phase 2 fixture registration needs these; skip when tearing down or
     # when --skip-phase2 is set (Phase 1-only deploy).
     if [[ "${TEAR_DOWN}" != true && "${SKIP_PHASE2}" != true ]]; then
@@ -474,6 +490,12 @@ extract_ca_cert() {
     log "Extracting CA cert from cert-manager secret"
     mkdir -p "${DEPLOY_DIR}"
 
+    local ca_file="${DEPLOY_DIR}/osac-ca.pem"
+    if [[ -e "${ca_file}" && ! -f "${ca_file}" ]]; then
+        err "OSAC CA certificate path exists but is not a regular file: ${ca_file}"
+        return 1
+    fi
+
     local retries=0
     until oc get secret osac-ca -n cert-manager &>/dev/null; do
         sleep 5
@@ -481,9 +503,24 @@ extract_ca_cert() {
         [[ ${retries} -gt 24 ]] && { err "osac-ca secret did not appear in cert-manager namespace"; exit 1; }
     done
 
-    oc get secret osac-ca -n cert-manager \
+    local ca_tmp
+    ca_tmp="$(mktemp "${DEPLOY_DIR}/.osac-ca.pem.XXXXXX")"
+    if ! oc get secret osac-ca -n cert-manager \
         -o go-template='{{ index .data "tls.crt" | base64decode }}' \
-        > "${DEPLOY_DIR}/osac-ca.pem"
+        > "${ca_tmp}"; then
+        rm -f "${ca_tmp}"
+        err "Failed to extract CA certificate from cert-manager secret osac-ca"
+        return 1
+    fi
+    if ! validate_osac_ca_cert "${ca_tmp}"; then
+        rm -f "${ca_tmp}"
+        return 1
+    fi
+    if ! chmod 644 "${ca_tmp}" || ! mv -f "${ca_tmp}" "${ca_file}"; then
+        rm -f "${ca_tmp}"
+        err "Could not install extracted CA certificate at ${ca_file}"
+        return 1
+    fi
     info "CA cert written to deploy/osac-ca.pem"
 }
 
@@ -704,6 +741,12 @@ EOF
         --values "${values_file}" \
         2>&1 | grep -Ev '^(Pulled|Digest): ' > "${rendered_file}"
 
+    # The chart sets token issuers to externalHostname:8000, but the OCP Route
+    # exposes the gRPC service on HTTPS port 443. Keep issuer and JWKS discovery
+    # on the route's actual external URL for both the server and console proxy.
+    bash "${SCRIPT_DIR}/normalize-fulfillment-token-issuer.sh" \
+        "${rendered_file}" "https://${grpc_host}"
+
     yq eval-all 'select(. != null) | select(.kind != "TLSRoute")' "${rendered_file}" \
         > "${filtered_file}"
 
@@ -713,18 +756,21 @@ EOF
     log "Waiting for fulfillment-grpc-server to be available (up to 5m)"
     oc rollout status deployment/fulfillment-grpc-server -n "${NS}" --timeout=5m
 
-    # Discover the gRPC server Service port (for the Route targetPort)
-    local grpc_port
-    grpc_port="$(oc get service fulfillment-grpc-server -n "${NS}" \
+    # The external TLS Route must target the chart's Envoy ingress service. It
+    # serves JWKS/REST and proxies gRPC, and its certificate includes grpc_host.
+    # Routing directly to fulfillment-grpc-server bypasses Envoy and presents an
+    # internal-only certificate, so external JWKS discovery fails TLS validation.
+    local external_api_port
+    external_api_port="$(oc get service fulfillment-api -n "${NS}" \
         -o jsonpath='{.spec.ports[0].name}' 2>/dev/null)"
-    if [[ -z "${grpc_port}" ]]; then
+    if [[ -z "${external_api_port}" ]]; then
         # Fallback: use port number
-        grpc_port="$(oc get service fulfillment-grpc-server -n "${NS}" \
+        external_api_port="$(oc get service fulfillment-api -n "${NS}" \
             -o jsonpath='{.spec.ports[0].port}' 2>/dev/null)"
     fi
 
-    # Create gRPC passthrough Route (HTTP/2 + TLS)
-    log "Creating gRPC OCP Route (passthrough TLS)"
+    # Create the external API/gRPC OCP Route (HTTP/2 + TLS passthrough).
+    log "Creating fulfillment API/gRPC OCP Route (passthrough TLS)"
     oc apply -n "${NS}" -f - <<EOF
 apiVersion: route.openshift.io/v1
 kind: Route
@@ -738,14 +784,17 @@ spec:
   host: ${grpc_host}
   to:
     kind: Service
-    name: fulfillment-grpc-server
+    name: fulfillment-api
   port:
-    targetPort: "${grpc_port}"
+    targetPort: "${external_api_port}"
   tls:
     termination: passthrough
 EOF
 
-    info "gRPC Route created at ${grpc_host}:443"
+    info "fulfillment API/gRPC Route created at ${grpc_host}:443"
+
+    log "Waiting for fulfillment-console-proxy JWKS initialization"
+    oc rollout status deployment/fulfillment-console-proxy -n "${NS}" --timeout=2m
 
     # Write output env file (Phase 1 complete)
     write_env_file "${keycloak_host}" "${grpc_host}"
@@ -796,7 +845,11 @@ deploy_phase2() {
     local phase2_dir="${MANIFESTS_DIR}/phase2"
     local tmp_dir
     tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "${tmp_dir}"' RETURN
+    # Expand the temporary path when installing the trap. RETURN traps run
+    # after this function's local variables have gone out of scope; referring
+    # to ${tmp_dir} from the trap body would trigger set -u and abort deploy.
+    # shellcheck disable=SC2064
+    trap "rm -rf -- '${tmp_dir}'" RETURN
 
     log "Deploying Phase 2 components (osac-operator, BMFO, aap-mock, fixtures)"
     info "Fetching upstream manifests at ref ${OSAC_SP_UPSTREAM_REF}"
@@ -814,8 +867,24 @@ deploy_phase2() {
         osac.openshift.io_baremetalinstances.yaml \
         osac.openshift.io_baremetalpools.yaml \
         osac.openshift.io_computeinstances.yaml \
+        osac.openshift.io_externalipattachments.yaml \
+        osac.openshift.io_externalips.yaml \
         tenants.osac.openshift.io.yaml; do
-        fetch_upstream "${crd}" "${crds_tmp}" "test/e2e/manifests-tierb/crds"
+        if [[ "${crd}" == osac.openshift.io_externalipattachments.yaml || \
+              "${crd}" == osac.openshift.io_externalips.yaml ]]; then
+            # These API types are owned by osac-operator rather than the SP
+            # repository's Tier B fixture bundle. Install the types so the
+            # ClusterOrder finalizer can safely observe zero objects even when
+            # networking controllers are disabled.
+            local operator_crd_url="https://raw.githubusercontent.com/osac-project/osac-operator/main/charts/operator-crds/templates/${crd}"
+            curl --fail --silent --show-error --location "${operator_crd_url}" \
+                -o "${crds_tmp}/${crd}.tpl"
+            sed '/{{- if .Values.install }}/d;/{{- end }}/d' \
+                "${crds_tmp}/${crd}.tpl" > "${crds_tmp}/${crd}"
+            rm -f "${crds_tmp}/${crd}.tpl"
+        else
+            fetch_upstream "${crd}" "${crds_tmp}" "test/e2e/manifests-tierb/crds"
+        fi
         # baremetalhosts.metal3.io is owned by CNV/metal3 on OCP; applying it
         # conflicts with the cluster-version-operator. Skip if already present.
         if [[ "${crd}" == "baremetalhosts.metal3.io.yaml" ]] \
@@ -873,6 +942,35 @@ deploy_phase2() {
             "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}"
         info "hardware-inventory created and labeled for teardown ownership"
     fi
+
+    # The operator lists Agents while reconciling and deleting ClusterOrders.
+    # Keep this namespace-scoped and read-only; a real Agent controller remains
+    # a separate Tier C prerequisite.
+    oc apply -f - <<YAML
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-operator-agent-reader
+  namespace: hardware-inventory
+rules:
+  - apiGroups: [agent-install.openshift.io]
+    resources: [agents]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-operator-agent-reader
+  namespace: hardware-inventory
+subjects:
+  - kind: ServiceAccount
+    name: osac-operator
+    namespace: ${NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-operator-agent-reader
+YAML
 
     # --- BMFO stub secrets ---------------------------------------------------
     log "Applying BMFO stub secrets"
@@ -1002,6 +1100,11 @@ deploy_phase2() {
     log "Registering hub, HostType, ClusterTemplate, and ClusterVersion with fulfillment-service"
     register_fixtures
 
+    if [[ "${OSAC_AAP_MODE}" == "real" ]]; then
+        log "Configuring disposable real AAP Gateway integration"
+        OSAC_BACKEND_NAMESPACE="${NS}" bash "${SCRIPT_DIR}/deploy-osac-aap.sh"
+    fi
+
     info "Phase 2 deployment complete — clusters will advance to PROGRESSING via osac-operator + BMFO + aap-mock"
     info "Note: full ACTIVE status (kubeconfig delivery) requires real Agents — this is Tier C territory"
 }
@@ -1080,9 +1183,108 @@ wait_local_port() {
     return 1
 }
 
+ensure_keycloak_organizations() {
+    local keycloak_port="$1"
+    local token organization response http_code
+
+    token="$(curl --fail --silent --show-error \
+        --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+        --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+        --request POST \
+        "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/realms/master/protocol/openid-connect/token" \
+        -d 'client_id=admin-cli' \
+        -d 'username=admin' \
+        -d 'password=tierb-keycloak-admin-password' \
+        -d 'grant_type=password' \
+        | jq -r '.access_token')"
+    if [[ -z "${token}" || "${token}" == "null" ]]; then
+        err "Failed to obtain Keycloak admin token — organization initialization aborted"
+        return 1
+    fi
+
+    for organization in system shared; do
+        response="$(curl --fail --silent --show-error \
+            --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+            --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+            --get \
+            --data-urlencode "exact=true" \
+            --data-urlencode "search=${organization}" \
+            -H "Authorization: Bearer ${token}" \
+            "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/admin/realms/osac/organizations")"
+        if jq -e --arg name "${organization}" 'any(.[]; .name == $name)' <<<"${response}" >/dev/null; then
+            info "  Keycloak organization '${organization}' already exists"
+            continue
+        fi
+
+        http_code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+            --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+            --request POST \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"name\":\"${organization}\",\"alias\":\"${organization}\",\"domains\":[{\"name\":\"${organization}\"}]}" \
+            "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/admin/realms/osac/organizations")"
+        if [[ "${http_code}" != 201 && "${http_code}" != 409 ]]; then
+            err "Failed to initialize Keycloak organization '${organization}' (HTTP ${http_code})"
+            return 1
+        fi
+        info "  Keycloak organization '${organization}' initialized (HTTP ${http_code})"
+    done
+}
+
+ensure_keycloak_roles() {
+    local keycloak_port="$1"
+    local token role_status create_status
+
+    token="$(curl --fail --silent --show-error \
+        --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+        --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+        --request POST \
+        "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/realms/master/protocol/openid-connect/token" \
+        -d 'client_id=admin-cli' \
+        -d 'username=admin' \
+        -d 'password=tierb-keycloak-admin-password' \
+        -d 'grant_type=password' \
+        | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')"
+
+    role_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+        --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+        --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+        -H "Authorization: Bearer ${token}" \
+        "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/admin/realms/osac/roles/tenant-idp-manager")"
+    if [[ "${role_status}" == "200" ]]; then
+        info "  Keycloak realm role 'tenant-idp-manager' already exists"
+        return 0
+    fi
+    if [[ "${role_status}" != "404" ]]; then
+        err "Failed to check Keycloak realm role 'tenant-idp-manager' (HTTP ${role_status})"
+        return 1
+    fi
+
+    create_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+        --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+        --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+        -H "Authorization: Bearer ${token}" \
+        -H 'Content-Type: application/json' \
+        -d '{"name":"tenant-idp-manager","description":"OSAC fulfillment-service tenant identity-provider manager role"}' \
+        "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/admin/realms/osac/roles")"
+    if [[ "${create_status}" != "201" && "${create_status}" != "409" ]]; then
+        err "Failed to initialize Keycloak realm role 'tenant-idp-manager' (HTTP ${create_status})"
+        return 1
+    fi
+    info "  Keycloak realm role 'tenant-idp-manager' initialized (HTTP ${create_status})"
+}
+
 _register_fixtures_body() {
     local internal_api_port="$1"
     local keycloak_port="$2"
+
+    # Keycloak imports the realm clients but does not import Organizations. The
+    # fulfillment controller requires these two organizations before it can
+    # create tenant groups or dispatch ClusterOrders. Initialize them before
+    # registering Phase 2 fixtures; the operation is idempotent for redeploys.
+    ensure_keycloak_organizations "${keycloak_port}"
+    ensure_keycloak_roles "${keycloak_port}"
 
     # Get OIDC token (client credentials — no browser interaction)
     local token
@@ -1142,7 +1344,7 @@ users:
   user:
     token: ${hub_token}
 EOF
-)"
+    )"
 
     grpc_create() {
         # grpc_create LABEL SERVICE METHOD JSON_BODY
@@ -1174,9 +1376,36 @@ EOF
     }
 
     info "  Registering Hub"
-    grpc_create "Hub" osac.private.v1.Hubs Create \
-        "{\"object\":{\"metadata\":{\"name\":\"default-hub\"},\"spec\":{\"kubeconfig\":\"${kubeconfig_b64}\",\"namespace\":\"default\"}}}" \
-        || return 1
+    local hub_body
+    hub_body="{\"object\":{\"metadata\":{\"name\":\"default-hub\"},\"spec\":{\"kubeconfig\":\"${kubeconfig_b64}\",\"namespace\":\"default\"}}}"
+    grpc_create "Hub" osac.private.v1.Hubs Create "${hub_body}" || return 1
+    # Create is intentionally idempotent, but an existing Hub may still carry
+    # a stale kubeconfig from an earlier deployment. Always update it with the
+    # currently authenticated oc context so controller discovery uses valid
+    # credentials.
+    local hub_update_body hub_update_result hub_update_rc=0
+    hub_update_body="$(grpcurl -insecure \
+        -H "Authorization: Bearer ${token}" \
+        "127.0.0.1:${internal_api_port}" \
+        osac.private.v1.Hubs/List \
+        | jq -c --arg kc "${kubeconfig_b64}" \
+            '(.items[] | select(.metadata.name == "default-hub")) as $hub
+             | {object: ($hub | .spec.kubeconfig = $kc)}')"
+    if [[ -z "${hub_update_body}" || "${hub_update_body}" == "null" ]]; then
+        err "  Hub update failed: default-hub was not returned by Hubs/List"
+        return 1
+    fi
+    hub_update_result="$(grpcurl -insecure \
+        -H "Authorization: Bearer ${token}" \
+        -d "${hub_update_body}" \
+        "127.0.0.1:${internal_api_port}" \
+        osac.private.v1.Hubs/Update 2>&1)" || hub_update_rc=$?
+    if [[ "${hub_update_rc}" -ne 0 ]]; then
+        err "  Hub update failed (grpcurl exit ${hub_update_rc}):"
+        echo "${hub_update_result}" >&2
+        return 1
+    fi
+    info "  Hub kubeconfig updated"
 
     info "  Registering HostType"
     grpc_create "HostType" osac.public.v1.HostTypes Create \

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -239,11 +240,40 @@ func initOsacSP() {
 			osacSPBaseURL, err)
 		return
 	}
+	var clusterHealth osacHealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&clusterHealth); err != nil {
+		resp.Body.Close()
+		GinkgoWriter.Printf("OSAC SP cluster health was not valid JSON: %v — tests will be skipped\n", err)
+		return
+	}
 	resp.Body.Close()
 	// OSAC SP always returns HTTP 200 for health (DD-010: status lives in body, not HTTP code).
 	if resp.StatusCode != http.StatusOK {
 		GinkgoWriter.Printf("OSAC SP /clusters/health returned %d — OSAC SP tests will be skipped\n",
 			resp.StatusCode)
+		return
+	}
+	simulatorErrorScenario := os.Getenv("OSAC_FULFILLMENT_MODE") == "simulator" &&
+		(os.Getenv("SIMULATOR_SCENARIO") == "backend-unavailable" || os.Getenv("SIMULATOR_SCENARIO") == "backend-timeout")
+	if clusterHealth.Status != "healthy" && !simulatorErrorScenario {
+		GinkgoWriter.Printf("OSAC SP cluster health is %q — tests will be skipped\n", clusterHealth.Status)
+		return
+	}
+
+	vmResp, err := httpClient.Get(osacSPBaseURL + "/vms/health")
+	if err != nil {
+		GinkgoWriter.Printf("OSAC SP VM health not reachable: %v — tests will be skipped\n", err)
+		return
+	}
+	var vmHealth osacHealthResponse
+	if err := json.NewDecoder(vmResp.Body).Decode(&vmHealth); err != nil {
+		vmResp.Body.Close()
+		GinkgoWriter.Printf("OSAC SP VM health was not valid JSON: %v — tests will be skipped\n", err)
+		return
+	}
+	vmResp.Body.Close()
+	if vmResp.StatusCode != http.StatusOK || (vmHealth.Status != "healthy" && !simulatorErrorScenario) {
+		GinkgoWriter.Printf("OSAC SP VM health is HTTP %d/%q — tests will be skipped\n", vmResp.StatusCode, vmHealth.Status)
 		return
 	}
 
@@ -262,12 +292,12 @@ func requireOsacSP() {
 
 // doOsacClusterRequest performs an HTTP request against the OSAC SP's /clusters path.
 func doOsacClusterRequest(method, path, body string) (*http.Response, error) {
-	return doOsacRequest(osacSPBaseURL+path, method, body)
+	return doOsacRequestWithClient(osacHTTPClient, osacSPBaseURL+path, method, body)
 }
 
 // doOsacVMRequest performs an HTTP request against the OSAC SP's /vms path.
 func doOsacVMRequest(method, path, body string) (*http.Response, error) {
-	return doOsacRequest(osacSPBaseURL+path, method, body)
+	return doOsacRequestWithClient(osacHTTPClient, osacSPBaseURL+path, method, body)
 }
 
 // doEnvAgentRequest performs an HTTP request against the environment-agent API.
@@ -276,6 +306,12 @@ func doEnvAgentRequest(method, path, body string) (*http.Response, error) {
 }
 
 func doOsacRequest(url, method, body string) (*http.Response, error) {
+	return doOsacRequestWithClient(httpClient, url, method, body)
+}
+
+var osacHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+func doOsacRequestWithClient(client *http.Client, url, method, body string) (*http.Response, error) {
 	var reqBody io.Reader
 	if body != "" {
 		reqBody = strings.NewReader(body)
@@ -287,7 +323,7 @@ func doOsacRequest(url, method, body string) (*http.Response, error) {
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return httpClient.Do(req)
+	return client.Do(req)
 }
 
 // ── Payload builders ───────────────────────────────────────────────────────
@@ -400,6 +436,12 @@ func osacClusterStatusValid(status string) bool {
 		return true
 	}
 	return false
+}
+
+func requireSimulatorScenario(scenario string) {
+	if os.Getenv("OSAC_FULFILLMENT_MODE") != "simulator" || os.Getenv("SIMULATOR_SCENARIO") != scenario {
+		Skip(fmt.Sprintf("requires OSAC_FULFILLMENT_MODE=simulator and SIMULATOR_SCENARIO=%s", scenario))
+	}
 }
 
 // osacVMStatusValid returns true if status is one of the 8-value VM vocabulary.

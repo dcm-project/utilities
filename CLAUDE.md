@@ -194,7 +194,8 @@ make test-smoke            # Run smoke tests only (health checks + CLI version)
 make test-cli              # Run CLI tests only
 make test-sp               # Run container SP tests (SP must be deployed)
 make test-acm-sp           # Run ACM cluster SP tests (ACM SP must be deployed)
-make test-osac-sp          # Run OSAC SP tests (--environment-agent --osac-service-provider required)
+make test-osac-sp          # Run OSAC SP contract tests (--environment-agent --osac-service-provider required)
+make test-osac-dispatch    # Run opt-in OCP-backed Tier B++ dispatch tests
 make test-core             # Run core platform tests (full control plane provisioning flow)
 make test-rehydration      # Run all rehydration tests (multi-provider + podman required)
 make test-rehydration-safe # Run non-disruptive rehydration tests only
@@ -233,7 +234,7 @@ the backend is a self-contained stack deployed on the edge94 OCP cluster using
 test-only credentials vendored from `dcm-project/osac-service-provider`'s own Tier B
 e2e infrastructure (`tests/osac-backend/`).
 
-**Fully turn-key (requires `oc`, `helm`, `yq` — `deploy-dcm.sh` deploys the backend for you):**
+**Fully turn-key (requires `oc`, `helm`, `yq`, `openssl` — `deploy-dcm.sh` deploys the backend for you):**
 
 ```bash
 oc_login_auto                       # log in to edge94
@@ -245,7 +246,15 @@ oc_login_auto                       # log in to edge94
 (idempotent — skips already-present cert-manager/namespace/etc. on reruns), then
 `deploy-dcm.sh` auto-detects the resulting `deploy/osac-backend.env` and wires in
 credentials plus the TLS CA overlay (`tests/compose-osac-sp-tls.yaml`) automatically —
-no manual `source` or `--compose-file` needed.
+no manual `source` or `--compose-file` needed. It validates the CA as a readable, non-empty
+PEM X.509 certificate before Compose starts. On macOS, the combined command also starts or
+reuses the launchd-managed Keycloak/gRPC port-forwards before provider validation, then
+injects the Darwin routing overlay.
+
+Use `--osac-aap-mode real` with the combined command to additionally deploy the disposable
+AAP 2.7 Controller/Gateway integration, activate it from `OSAC_AAP_MANIFEST`, and configure
+the OSAC operator to use the Gateway. The default `--osac-aap-mode mock` remains available
+for fast contract tests; real mode does not remove the mock deployment.
 
 **Or as two steps (useful when reusing one backend across many stack up/down cycles):**
 
@@ -261,6 +270,11 @@ make deploy-osac-backend            # one-time: deploys Postgres + Keycloak + fu
 ```bash
 # Validation-only (no real backend needed — always runs):
 make test-osac-sp
+make test-osac-dispatch     # opt-in Tier B++ dispatch boundary
+
+# Use the deterministic fulfillment-service simulator instead of a live backend.
+./scripts/deploy-dcm.sh --osac-fulfillment-mode simulator \
+  --environment-agent --osac-service-provider
 
 # Full CRUD + NATS (requires backend + template IDs):
 OSAC_E2E_CLUSTER_TEMPLATE_ID=<id> \
@@ -271,6 +285,18 @@ make test-osac-sp
 The backend namespace is `osac-test-backend` by default. Teardown — `deploy-dcm.sh --tear-down`
 does **not** remove the backend on its own (it only tears down the compose stack); either
 couple it explicitly or use the standalone target:
+
+**Tier B++ dispatch boundary:** The opt-in `tier-b-dispatch` suite is an OCP-backed
+orchestration-boundary tier between the self-contained Tier B API tests and real Tier C
+infrastructure. It validates OpenShift authentication/resource discovery, exact SP ID to
+ClusterOrder linkage, request translation, NATS correlation, and the observable operator
+stop point. It does not prove Agent allocation, AAP execution, BMC/Ironic access, real
+bare-metal provisioning, `ACTIVE` state, kubeconfig usability, VM networking, or real
+infrastructure cleanup. The current real-AAP Phase 2 result is TBP-010/TBP-020/TBP-030
+passing; the linked order reaches `NamespaceCreated=True` and `Progressing=True` with
+`PreparingInfrastructure`, then stops because no Agent/BMI/HostedCluster exists. This is
+not a Tier C substitute. TBP-040/050 remain disabled until suitable Agent resources or a
+contract-faithful simulator makes those paths reachable.
 
 ```bash
 ./scripts/deploy-dcm.sh --deploy-osac-backend --tear-down   # tears down compose stack + OSAC backend
@@ -289,17 +315,18 @@ ever needs to change (e.g. secret-scanning policy), it must be coordinated with 
 
 The OCP cluster's internal service network (`192.168.30.x`) is not directly routable from a Mac.
 `make port-forward-osac` tunnels the required services via `oc port-forward`, registered as
-persistent macOS launchd agents (`com.osac.pf.keycloak`, `com.osac.pf.grpc`):
+persistent macOS launchd agents (`com.osac.pf.keycloak`, `com.osac.pf.grpc`). The combined
+deploy command starts them automatically after deploying the backend:
 
 ```bash
 oc_login_auto
-make port-forward-osac    # tunnels 8443 (Keycloak) and 19443 (gRPC) via launchd auto-restart
-./scripts/deploy-dcm.sh --environment-agent --osac-service-provider
-# deploy-dcm.sh auto-detects the port-forwards (lsof) and injects
-# tests/compose-osac-sp-darwin-pf.yaml with the correct in-cluster hostnames
+./scripts/deploy-dcm.sh --deploy-osac-backend --environment-agent --osac-service-provider
 make test-osac-sp
 make stop-port-forward-osac    # when done
 ```
+
+If the backend is already deployed separately, run `make port-forward-osac` before
+`deploy-dcm.sh --environment-agent --osac-service-provider`.
 
 Key design: Keycloak is accessed via its in-cluster hostname (`ffs-keycloak.osac-test-backend.svc.cluster.local:8443`) — this makes Keycloak issue tokens with the issuer URL that matches fulfillment-service's configured `auth.issuerUrl`. Port 8443 does not need sudo on macOS (> 1024).
 
