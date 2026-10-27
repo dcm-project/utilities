@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+# shellcheck shell=bash
 
 validate_osac_ca_cert() {
     local cert_file="${1:-}"

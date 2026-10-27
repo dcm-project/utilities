@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -262,12 +263,12 @@ func requireOsacSP() {
 
 // doOsacClusterRequest performs an HTTP request against the OSAC SP's /clusters path.
 func doOsacClusterRequest(method, path, body string) (*http.Response, error) {
-	return doOsacRequest(osacSPBaseURL+path, method, body)
+	return doOsacRequestWithClient(osacHTTPClient, osacSPBaseURL+path, method, body)
 }
 
 // doOsacVMRequest performs an HTTP request against the OSAC SP's /vms path.
 func doOsacVMRequest(method, path, body string) (*http.Response, error) {
-	return doOsacRequest(osacSPBaseURL+path, method, body)
+	return doOsacRequestWithClient(osacHTTPClient, osacSPBaseURL+path, method, body)
 }
 
 // doEnvAgentRequest performs an HTTP request against the environment-agent API.
@@ -276,6 +277,12 @@ func doEnvAgentRequest(method, path, body string) (*http.Response, error) {
 }
 
 func doOsacRequest(url, method, body string) (*http.Response, error) {
+	return doOsacRequestWithClient(httpClient, url, method, body)
+}
+
+var osacHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+func doOsacRequestWithClient(client *http.Client, url, method, body string) (*http.Response, error) {
 	var reqBody io.Reader
 	if body != "" {
 		reqBody = strings.NewReader(body)
@@ -287,7 +294,7 @@ func doOsacRequest(url, method, body string) (*http.Response, error) {
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return httpClient.Do(req)
+	return client.Do(req)
 }
 
 // ── Payload builders ───────────────────────────────────────────────────────
