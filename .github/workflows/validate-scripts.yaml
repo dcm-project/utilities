@@ -166,11 +166,6 @@ jobs:
     name: podman-compose networking
     runs-on: ubuntu-latest
     timeout-minutes: 5
-  validate-osac-ca:
-    name: OSAC CA validation
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-
     steps:
       - uses: actions/checkout@v6
 
@@ -205,6 +200,13 @@ jobs:
           probe_id="$(podman ps -q --filter "label=com.docker.compose.project=${project}" --filter 'label=com.docker.compose.service=probe')"
           test -n "${probe_id}"
           test "$(podman exec "${probe_id}" wget -q -O - http://database:8080/)" = "database"
+
+  validate-osac-ca:
+    name: OSAC CA validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
       - name: Validate OSAC CA certificate checks
         run: bash tests/test-osac-ca-validation.sh
 

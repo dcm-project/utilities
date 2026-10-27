@@ -1280,7 +1280,8 @@ if [[ "${TEAR_DOWN}" == true ]]; then
         log "Tearing down OSAC backend (--deploy-osac-backend + --tear-down)"
         resolve_kubeconfig || exit 1
         if [[ "${OSAC_AAP_MODE}" == "real" ]]; then
-            OSAC_BACKEND_NAMESPACE="${OSAC_BACKEND_NAMESPACE:-osac-test-backend}" \
+            KUBECONFIG="${DCM_KUBECONFIG}" \
+                OSAC_BACKEND_NAMESPACE="${OSAC_BACKEND_NAMESPACE:-osac-test-backend}" \
                 bash "${REPO_ROOT}/scripts/deploy-osac-aap.sh" --tear-down
         fi
         KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" --tear-down

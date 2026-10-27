@@ -59,17 +59,17 @@ oc apply -f - <<'YAML'
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
-  name: osac-aap-test
-  namespace: osac-aap-test
+  name: ${AAP_NAMESPACE}
+  namespace: ${AAP_NAMESPACE}
 spec:
   targetNamespaces:
-    - osac-aap-test
+    - ${AAP_NAMESPACE}
 ---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
   name: ansible-automation-platform-operator
-  namespace: osac-aap-test
+  namespace: ${AAP_NAMESPACE}
 spec:
   channel: stable-2.7
   installPlanApproval: Automatic
@@ -80,7 +80,7 @@ YAML
 
 log "Waiting for AAP Operator CSV"
 oc wait --for=jsonpath='{.status.phase}'=Succeeded \
-    csv -l operators.coreos.com/ansible-automation-platform-operator.osac-aap-test \
+    csv -l "operators.coreos.com/ansible-automation-platform-operator.${AAP_NAMESPACE}" \
     -n "${AAP_NAMESPACE}" --timeout=5m
 
 db_password="$(oc get secret aap-postgres-runtime -n "${AAP_NAMESPACE}" -o jsonpath='{.data.POSTGRESQL_PASSWORD}' 2>/dev/null | base64 --decode || true)"
@@ -190,6 +190,7 @@ kind: AnsibleAutomationPlatform
 metadata:
   name: osac-aap-platform
   namespace: ${AAP_NAMESPACE}
+spec:
   admin_password_secret: aap-controller-admin-password
   ingress_type: Route
   route_tls_termination_mechanism: Edge
