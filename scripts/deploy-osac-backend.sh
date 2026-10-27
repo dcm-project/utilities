@@ -129,6 +129,7 @@ readonly NS="${OSAC_BACKEND_NAMESPACE}"
 
 if [[ "${TEAR_DOWN}" == true && "${OSAC_AAP_MODE}" == "real" ]]; then
     OSAC_BACKEND_NAMESPACE="${NS}" bash "${SCRIPT_DIR}/deploy-osac-aap.sh" --tear-down
+fi
 if [[ "${TEAR_DOWN}" != true && "${ALLOW_TIERB_CREDENTIALS}" != true ]]; then
     err "This deployment uses committed Tier B test credentials. Re-run with --allow-tierb-credentials only in a disposable test environment."
     exit 1
