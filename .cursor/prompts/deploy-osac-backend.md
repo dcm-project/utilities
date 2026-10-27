@@ -16,7 +16,8 @@ The OSAC SP needs a real fulfillment-service backend to test against, but acquir
 
 ### Fully turn-key (recommended for a one-shot test run)
 ```bash
-./scripts/deploy-dcm.sh --deploy-osac-backend --environment-agent --osac-service-provider
+./scripts/deploy-dcm.sh --deploy-osac-backend --allow-tierb-credentials \
+  --environment-agent --osac-service-provider
 ```
 `--deploy-osac-backend` runs `scripts/deploy-osac-backend.sh` before compose bring-up (idempotent — skips already-present cert-manager/namespace/etc. on reruns), then `deploy-dcm.sh` auto-detects the resulting `deploy/osac-backend.env` and wires in credentials plus the TLS CA overlay automatically. No manual `source` or `--compose-file` needed.
 
@@ -226,5 +227,6 @@ If it's missing entirely, re-run `./scripts/deploy-osac-backend.sh`.
 
 ```bash
 ./scripts/deploy-dcm.sh --deploy-osac-backend --tear-down
-./scripts/deploy-dcm.sh --deploy-osac-backend --environment-agent --osac-service-provider
+./scripts/deploy-dcm.sh --deploy-osac-backend --allow-tierb-credentials \
+  --environment-agent --osac-service-provider
 ```

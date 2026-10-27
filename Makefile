@@ -16,7 +16,7 @@ e2e-up: ## Deploy the full DCM stack
 	./scripts/deploy-dcm.sh
 
 deploy-osac-backend: ## Deploy OSAC fulfillment-service backend on OCP (for OSAC SP E2E tests)
-	./scripts/deploy-osac-backend.sh
+	./scripts/deploy-osac-backend.sh --allow-tierb-credentials
 
 teardown-osac-backend: ## Remove the OSAC backend from OCP
 	./scripts/deploy-osac-backend.sh --tear-down
@@ -53,6 +53,12 @@ test-kubevirt-sp: ## Run KubeVirt SP tests only (KubeVirt cluster required)
 
 test-osac-sp: ## Run OSAC SP contract tests only (--environment-agent --osac-service-provider required)
 	cd tests/e2e && $(GINKGO_BASE) --label-filter='osac && !tier-b-dispatch' .
+
+test-osac-dispatch: ## Run opt-in OSAC Tier B++ dispatch tests
+	cd tests/e2e && $(GINKGO_BASE) --label-filter='osac && tier-b-dispatch' .
+
+test-osac-external: ## Run OSAC control-plane to external-provider smoke test
+	cd tests/e2e && $(GINKGO_BASE) --label-filter='osac && external-provider' .
 
 test-osac-dispatch: ## Run opt-in OSAC Tier B++ dispatch tests
 	cd tests/e2e && $(GINKGO_BASE) --label-filter='osac && tier-b-dispatch' .
