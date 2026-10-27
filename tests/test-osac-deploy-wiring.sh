@@ -89,7 +89,7 @@ if [[ "${forward_output}" != *"already listening"* ]]; then
     exit 1
 fi
 
-backend_line="$(grep -nF 'deploy-osac-backend.sh" --aap-mode' \
+backend_line="$(grep -nF 'KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh"' \
     "${REPO_ROOT}/scripts/deploy-dcm.sh" | grep -v -- '--tear-down' | cut -d: -f1)"
 ensure_line="$(grep -nF 'ensure_osac_port_forwards || exit 1' \
     "${REPO_ROOT}/scripts/deploy-dcm.sh" | cut -d: -f1)"
