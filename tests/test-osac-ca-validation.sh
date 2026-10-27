@@ -55,3 +55,5 @@ for invalid_path in \
 done
 
 printf 'OSAC CA certificate validation tests passed\n'
+
+# Covered by the PR65/PR66 script validation workflow.
