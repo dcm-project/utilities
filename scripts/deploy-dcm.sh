@@ -53,6 +53,8 @@ readonly AGENT_HEALTH_ENDPOINTS=(
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly GITOPS_COMPOSE_OVERRIDE="${REPO_ROOT}/tests/compose-gitops.yaml"
+# shellcheck source=scripts/osac-ca.sh
+source "${REPO_ROOT}/scripts/osac-ca.sh"
 
 # --- Provider registry ----------------------------------------------------- #
 #
@@ -154,8 +156,12 @@ EOF
   --deploy-cnv                   Deploy OpenShift Virtualization (CNV) on the cluster before starting the stack (opt-in, heavy)
   --deploy-osac-backend          Deploy the self-contained OSAC fulfillment-service backend before
                                   starting the stack (opt-in, heavy; see scripts/deploy-osac-backend.sh).
+                                  On macOS with --osac-service-provider, also starts the required
+                                  launchd-managed backend port-forwards automatically.
   --allow-tierb-credentials      Explicitly allow committed Tier B test credentials in a disposable test environment.
                                   With --tear-down, also removes the OSAC backend namespace.
+  --osac-aap-mode MODE           Select OSAC operator AAP backend: mock (default) or real.
+                                  real deploys the disposable AAP Gateway integration.
   --acm-cluster-sp-repo URL      Git repo for acm-cluster-service-provider (default: ${DEFAULT_ACM_CLUSTER_SP_REPO})
   --acm-cluster-sp-branch REF    Branch to clone (default: ${DEFAULT_ACM_CLUSTER_SP_BRANCH})
   --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted; mounted into the agent)
@@ -211,6 +217,7 @@ EOF
   MCE_CHANNEL               Override MCE subscription channel (auto-detect)
   CSV_TIMEOUT               Seconds to wait for operator CSV (default: 300)
   DEPLOY_TIMEOUT            Seconds to wait for ACM/MCE CR readiness (default: 1200)
+  OSAC_CA_CERT_FILE         PEM CA certificate for the OSAC backend TLS overlay
 
 Examples:
   $(basename "$0")
@@ -449,29 +456,26 @@ agent_embeds() {
 }
 
 validate_osac_provider() {
-    # OSAC SP needs no cluster access — validate credentials and env-agent dependency only.
+    # OSAC SP needs no cluster access — validate credentials, CA, and env-agent dependency.
     log "Validating OSAC service provider prerequisites"
 
     # Auto-detect and wire in a backend deployed via scripts/deploy-osac-backend.sh.
     # This makes --osac-service-provider turn-key: no manual `source` of the backend
     # env file and no manual --compose-file for the TLS CA overlay.
     local osac_backend_env="${REPO_ROOT}/deploy/osac-backend.env"
+    local osac_backend_env_found=false
     if [[ -f "${osac_backend_env}" ]] && { [[ "${DEPLOY_OSAC_BACKEND}" == true ]] || [[ -z "${SP_OSAC_FULFILLMENT_ADDRESS:-}" ]]; }; then
+        osac_backend_env_found=true
         info "Found OSAC backend env file: ${osac_backend_env} (sourcing)"
         # shellcheck source=/dev/null
         source "${osac_backend_env}"
-
-        local osac_tls_overlay="${REPO_ROOT}/tests/compose-osac-sp-tls.yaml"
-        if [[ -n "${OSAC_CA_CERT_FILE:-}" ]] && [[ -f "${osac_tls_overlay}" ]]; then
-            COMPOSE_EXTRA_FILE_ARGS+=("-f" "${osac_tls_overlay}")
-            info "Auto-injecting TLS overlay for OSAC backend CA cert: ${osac_tls_overlay}"
-        fi
 
         # On macOS the OCP worker nodes (192.168.30.x) are not routable via VPN and
         # the *.apps OCP wildcard DNS isn't served by the VPN's split-horizon resolvers.
         # Auto-inject the Darwin port-forward overlay when both conditions are met:
         #   1. Running on Darwin
-        #   2. The port-forwards are already listening on 18443/19443 (start them via
+        #   2. The port-forwards are already listening on 8443/19443 (started automatically
+        #      with --deploy-osac-backend or via
         #      `make port-forward-osac` or manually before deploying)
         local darwin_pf_overlay="${REPO_ROOT}/tests/compose-osac-sp-darwin-pf.yaml"
         if [[ "$(uname -s)" == "Darwin" ]] && [[ -f "${darwin_pf_overlay}" ]]; then
@@ -499,6 +503,48 @@ validate_osac_provider() {
         fi
     elif [[ -f "${osac_backend_env}" ]]; then
         info "Preserving caller-provided OSAC credentials; not sourcing ${osac_backend_env}"
+    fi
+
+    if [[ "${osac_backend_env_found}" == true ]] && [[ -z "${OSAC_CA_CERT_FILE:-}" ]]; then
+        err "OSAC backend env file does not set OSAC_CA_CERT_FILE"
+        return 1
+    fi
+
+    if [[ -n "${OSAC_CA_CERT_FILE:-}" ]]; then
+        if ! validate_osac_ca_cert "${OSAC_CA_CERT_FILE}"; then
+            return 1
+        fi
+
+        # Compose resolves relative bind-mount sources from its project directory,
+        # not this script's working directory. Normalize before passing the path on.
+        local ca_dir
+        ca_dir="$(cd "$(dirname "${OSAC_CA_CERT_FILE}")" && pwd)" || {
+            err "Cannot resolve OSAC_CA_CERT_FILE directory: ${OSAC_CA_CERT_FILE}"
+            return 1
+        }
+        OSAC_CA_CERT_FILE="${ca_dir}/$(basename "${OSAC_CA_CERT_FILE}")"
+        export OSAC_CA_CERT_FILE
+
+        local osac_tls_overlay="${REPO_ROOT}/tests/compose-osac-sp-tls.yaml"
+        if [[ ! -f "${osac_tls_overlay}" ]]; then
+            err "OSAC TLS compose overlay not found: ${osac_tls_overlay}"
+            return 1
+        fi
+
+        local overlay_present=false
+        local arg_index
+        for ((arg_index = 0; arg_index + 1 < ${#COMPOSE_EXTRA_FILE_ARGS[@]}; arg_index += 2)); do
+            if [[ "${COMPOSE_EXTRA_FILE_ARGS[${arg_index}]}" == "-f" ]] && \
+                [[ "${COMPOSE_EXTRA_FILE_ARGS[${arg_index} + 1]}" == "${osac_tls_overlay}" ]]; then
+                overlay_present=true
+                break
+            fi
+        done
+        if [[ "${overlay_present}" == false ]]; then
+            COMPOSE_EXTRA_FILE_ARGS+=("-f" "${osac_tls_overlay}")
+        fi
+        info "Using OSAC CA certificate: ${OSAC_CA_CERT_FILE}"
+        info "TLS overlay configured: ${osac_tls_overlay}"
     fi
 
     local missing=()
@@ -533,6 +579,31 @@ validate_osac_provider() {
         err "Add --environment-agent to your deploy command."
         return 1
     fi
+}
+
+ensure_osac_port_forwards() {
+    [[ "$(uname -s)" == "Darwin" ]] || return 0
+
+    local osac_provider_enabled=false
+    local i
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        if [[ "${PROV_FLAGS[$i]}" == "osac-service-provider" ]] && \
+           [[ "${PROV_ENABLED[$i]}" == true ]]; then
+            osac_provider_enabled=true
+            break
+        fi
+    done
+    [[ "${osac_provider_enabled}" == true ]] || return 0
+
+    if [[ -z "${DCM_KUBECONFIG:-}" ]]; then
+        err "Cannot start OSAC port-forwards without a resolved kubeconfig"
+        return 1
+    fi
+
+    log "Ensuring OSAC backend port-forwards for macOS"
+    KUBECONFIG="${DCM_KUBECONFIG}" \
+        OSAC_BACKEND_NAMESPACE="${OSAC_BACKEND_NAMESPACE:-osac-test-backend}" \
+        bash "${REPO_ROOT}/scripts/osac-port-forward.sh" --ensure
 }
 
 # --- Cluster authentication ------------------------------------------------ #
@@ -968,6 +1039,7 @@ CLEANUP_ON_FAILURE=false
 DEPLOY_ACM_MCE=""
 DEPLOY_CNV=false
 DEPLOY_OSAC_BACKEND=false
+OSAC_AAP_MODE="${OSAC_AAP_MODE:-mock}"
 ALLOW_TIERB_CREDENTIALS=false
 GITOPS_ENABLED=false
 ACM_CLUSTER_SP_REPO="${DEFAULT_ACM_CLUSTER_SP_REPO}"
@@ -1046,6 +1118,9 @@ while [[ $# -gt 0 ]]; do
             DEPLOY_CNV=true; shift ;;
         --deploy-osac-backend)
             DEPLOY_OSAC_BACKEND=true; shift ;;
+        --osac-aap-mode)
+            [[ "$2" == "mock" || "$2" == "real" ]] || { err "--osac-aap-mode must be mock or real"; exit 1; }
+            OSAC_AAP_MODE="$2"; shift 2 ;;
         --allow-tierb-credentials)
             ALLOW_TIERB_CREDENTIALS=true; shift ;;
         --deploy-acm)
@@ -1192,6 +1267,11 @@ if [[ "${TEAR_DOWN}" == true ]]; then
     if [[ "${DEPLOY_OSAC_BACKEND}" == true ]]; then
         log "Tearing down OSAC backend (--deploy-osac-backend + --tear-down)"
         resolve_kubeconfig || exit 1
+        if [[ "${OSAC_AAP_MODE}" == "real" ]]; then
+            KUBECONFIG="${DCM_KUBECONFIG}" \
+                OSAC_BACKEND_NAMESPACE="${OSAC_BACKEND_NAMESPACE:-osac-test-backend}" \
+                bash "${REPO_ROOT}/scripts/deploy-osac-aap.sh" --tear-down
+        fi
         KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" --tear-down
     fi
 
@@ -1301,7 +1381,9 @@ if [[ "${DEPLOY_OSAC_BACKEND}" == true ]]; then
     log "Deploying OSAC backend on the cluster (idempotent — skips already-present resources)"
     backend_args=()
     [[ "${ALLOW_TIERB_CREDENTIALS}" == true ]] && backend_args+=(--allow-tierb-credentials)
-    KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" "${backend_args[@]}"
+    KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" \
+        --aap-mode "${OSAC_AAP_MODE}" "${backend_args[@]}"
+    ensure_osac_port_forwards || exit 1
 fi
 
 # Validate and export env vars for each enabled provider
