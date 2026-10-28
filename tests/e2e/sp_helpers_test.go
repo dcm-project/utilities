@@ -28,59 +28,84 @@ const (
 var (
 	containerSPBaseURL string
 	containerSPReady   bool
+	containerSPOnce    sync.Once
 	natsURL            string
 )
 
 func initContainerSP() {
-	containerSPBaseURL = os.Getenv("DCM_CONTAINER_SP_URL")
-	if containerSPBaseURL == "" {
-		containerSPBaseURL = defaultContainerSPURL
-	}
-	containerSPBaseURL = strings.TrimRight(containerSPBaseURL, "/")
+	containerSPOnce.Do(func() {
+		containerSPBaseURL = os.Getenv("DCM_CONTAINER_SP_URL")
+		if containerSPBaseURL == "" {
+			containerSPBaseURL = defaultContainerSPURL
+		}
+		containerSPBaseURL = strings.TrimRight(containerSPBaseURL, "/")
 
-	natsURL = os.Getenv("DCM_NATS_URL")
-	if natsURL == "" {
-		natsURL = defaultNATSURL
-	}
+		natsURL = os.Getenv("DCM_NATS_URL")
+		if natsURL == "" {
+			natsURL = defaultNATSURL
+		}
 
-	resp, err := unauthenticatedClient.Get(containerSPBaseURL + "/containers/health")
-	if err != nil {
-		GinkgoWriter.Printf("Container SP not reachable at %s: %v — SP tests will be skipped\n", containerSPBaseURL, err)
-		return
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		GinkgoWriter.Printf("Container SP health returned %d — SP tests will be skipped\n", resp.StatusCode)
-		return
-	}
-	containerSPReady = true
-	GinkgoWriter.Printf("Container SP ready at %s\n", containerSPBaseURL)
+		initEnvironmentAgent()
+
+		resp, err := unauthenticatedClient.Get(containerSPBaseURL + "/containers/health")
+		if err != nil {
+			GinkgoWriter.Printf("Standalone container SP not reachable at %s: %v\n", containerSPBaseURL, err)
+			return
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			GinkgoWriter.Printf("Standalone container SP health returned %d at %s\n", resp.StatusCode, containerSPBaseURL)
+			return
+		}
+		containerSPReady = true
+		GinkgoWriter.Printf("Standalone container SP ready at %s\n", containerSPBaseURL)
+	})
 }
 
+// containerCapabilityAvailable is true when a standalone container SP is up
+// or the environment-agent embeds a Ready container provider.
+func containerCapabilityAvailable() bool {
+	initContainerSP()
+	if containerSPReady {
+		return true
+	}
+	return waitForAgentEmbed("container", 30*time.Second)
+}
+
+// requireContainerSP skips unless container workloads can be provisioned via
+// the control plane (standalone SP or agent-embedded container).
 func requireContainerSP() {
-	if !containerSPReady {
-		Skip("Container SP not available (deploy with --k8s-container-service-provider and publish port 8082)")
+	if !containerCapabilityAvailable() {
+		Skip("Container capability not available (standalone --k8s-container-service-provider on :8082, or --with-environment-agent embedding container)")
 	}
 }
 
-// doContainerSPRequest sends a request to the container SP's direct API.
+// doContainerSPRequest sends a request to the container SP HTTP API when a
+// standalone SP is up, otherwise via the control plane / environment-agent.
 func doContainerSPRequest(method, path string, body string) (*http.Response, error) {
-	url := containerSPBaseURL + path
+	initContainerSP()
+	if containerSPReady {
+		url := containerSPBaseURL + path
 
-	var reqBody io.Reader
-	if body != "" {
-		reqBody = strings.NewReader(body)
-	}
+		var reqBody io.Reader
+		if body != "" {
+			reqBody = strings.NewReader(body)
+		}
 
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		return nil, err
-	}
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
+		req, err := http.NewRequest(method, url, reqBody)
+		if err != nil {
+			return nil, err
+		}
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
 
-	return unauthenticatedClient.Do(req)
+		return unauthenticatedClient.Do(req)
+	}
+	if agentEmbeds("container") {
+		return doEmbeddedContainerSPRequest(method, path, body)
+	}
+	return nil, fmt.Errorf("container SP not available")
 }
 
 // expectRFC9457Problem asserts an RFC 9457 problem+json response (FLPATH-4720/4721)
@@ -178,7 +203,8 @@ func containerSpecWith(name, imageRef string, opts containerSpecOpts) string {
 		"metadata":     map[string]interface{}{"name": name},
 		"image":        map[string]interface{}{"reference": imageRef},
 		"resources": map[string]interface{}{
-			"cpu":    map[string]interface{}{"min": 1, "max": 1},
+			// CPU quantities are Kubernetes resource.Quantity strings (e.g. "1", "500m").
+			"cpu":    map[string]interface{}{"min": "1", "max": "1"},
 			"memory": map[string]interface{}{"min": "128MB", "max": "256MB"},
 		},
 	}

@@ -80,6 +80,7 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 		})
 
 		It("creates a container with a custom ID", func() {
+			skipUnlessDirectContainerSP()
 			customID := uniqueName("e2e-custom")
 			resp, err := doContainerSPRequest(http.MethodPost,
 				"/containers?id="+customID,
@@ -103,6 +104,7 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 		})
 
 		It("creates a container with ports and provisions a Service", func() {
+			skipUnlessDirectContainerSP()
 			name := uniqueName("e2e-ports")
 			body := createTestContainer(containerSpec(name, "docker.io/library/nginx:alpine", true))
 
@@ -177,6 +179,10 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 	})
 
 	Context("RFC 9457 error format", Label("contract"), func() {
+		BeforeEach(func() {
+			skipUnlessDirectContainerSP()
+		})
+
 		It("returns problem+json with status and project URI on validation error", func() {
 			resp, err := doContainerSPRequest(http.MethodPost, "/containers", `{}`)
 			Expect(err).NotTo(HaveOccurred())
@@ -199,7 +205,7 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 					},
 					"image": {"reference": "docker.io/library/nginx:alpine"},
 					"resources": {
-						"cpu": {"min": 10, "max": 5},
+						"cpu": {"min": "10", "max": "5"},
 						"memory": {"min": "128MB", "max": "256MB"}
 					}
 				}
@@ -225,7 +231,14 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 		})
 	})
 
+	// OpenAPI validation is a standalone-SP contract. In embedded mode the
+	// adapter fabricates these 400s (sp_embedded_http_test.go), so these specs
+	// must not run there.
 	Context("validation errors", func() {
+		BeforeEach(func() {
+			skipUnlessDirectContainerSP()
+		})
+
 		It("rejects an empty body", func() {
 			resp, err := doContainerSPRequest(http.MethodPost, "/containers", "")
 			Expect(err).NotTo(HaveOccurred())

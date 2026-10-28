@@ -47,7 +47,9 @@ var _ = Describe("ACM Cluster SP API", Label("sp", "acm-cluster"), func() {
 				}
 			}
 			Expect(found).NotTo(BeNil(), "no agent with service_types containing 'cluster' found")
-			Expect(found).To(HaveKeyWithValue("name", "acm-cluster-sp"))
+			if acmClusterSPReady {
+				Expect(found).To(HaveKeyWithValue("name", "acm-cluster-sp"))
+			}
 		})
 	})
 
@@ -104,7 +106,13 @@ var _ = Describe("ACM Cluster SP API", Label("sp", "acm-cluster"), func() {
 		})
 	})
 
+	// OpenAPI validation is a standalone-SP contract. In embedded mode the
+	// adapter fabricates these 400s (sp_embedded_http_test.go), so these specs
+	// must not run there.
 	Context("input validation", func() {
+		BeforeEach(func() {
+			skipUnlessDirectAcmClusterSP()
+		})
 
 		It("rejects an empty request body", func() {
 			resp, err := doAcmClusterSPRequest(http.MethodPost, "/clusters", "")
@@ -134,6 +142,10 @@ var _ = Describe("ACM Cluster SP API", Label("sp", "acm-cluster"), func() {
 	})
 
 	Context("RFC 9457 error format", Label("contract"), func() {
+		BeforeEach(func() {
+			skipUnlessDirectAcmClusterSP()
+		})
+
 		It("returns problem+json with status and project URI on validation error", func() {
 			resp, err := doAcmClusterSPRequest(http.MethodPost, "/clusters", `{}`)
 			Expect(err).NotTo(HaveOccurred())

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,8 +74,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 						"fields": [
 							{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
 							{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
-							{"path": "resources.cpu.min", "editable": false, "default": 1},
-							{"path": "resources.cpu.max", "editable": false, "default": 1},
+							{"path": "resources.cpu.min", "editable": false, "default": "1"},
+							{"path": "resources.cpu.max", "editable": false, "default": "1"},
 							{"path": "resources.memory.min", "editable": false, "default": "128MB"},
 							{"path": "resources.memory.max", "editable": false, "default": "256MB"}
 						]
@@ -180,7 +181,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(resp, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal("RUNNING"),
+			}).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal(instanceStatusRunning),
 				"SPRM should reflect RUNNING after the NATS consumer processes the SP's status event")
 		})
 
@@ -202,7 +203,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				if i["id"] == resourceID {
 					found = true
 					Expect(i).To(HaveKey("status"))
-					Expect(i["status"]).To(Equal("RUNNING"),
+					Expect(i["status"]).To(Equal(instanceStatusRunning),
 						"list endpoint should show the same status as individual GET")
 					break
 				}
@@ -219,7 +220,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 
 				var body map[string]interface{}
 				decodeJSON(resp, &body)
-				Expect(body["status"]).To(Equal("RUNNING"),
+				Expect(body["status"]).To(Equal(instanceStatusRunning),
 					"status should be consistent across read #%d", i+1)
 			}
 		})
@@ -280,8 +281,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 						"fields": [
 							{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
 							{"path": "image.reference", "display_name": "Image", "editable": true, "default": %q},
-							{"path": "resources.cpu.min", "editable": false, "default": 1},
-							{"path": "resources.cpu.max", "editable": false, "default": 1},
+							{"path": "resources.cpu.min", "editable": false, "default": "1"},
+							{"path": "resources.cpu.max", "editable": false, "default": "1"},
 							{"path": "resources.memory.min", "editable": false, "default": "128MB"},
 							{"path": "resources.memory.max", "editable": false, "default": "256MB"}
 						]
@@ -371,8 +372,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(resp, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(60*time.Second).WithPolling(3*time.Second).Should(Equal("PENDING"),
-				"SPRM API should show PENDING when the SP reports ImagePullBackOff → PENDING")
+			}).WithTimeout(60*time.Second).WithPolling(3*time.Second).Should(Equal(instanceStatusPending),
+				"SPRM API should show pending when the SP reports ImagePullBackOff")
 		})
 
 		It("does not transition to RUNNING for a bad image", func() {
@@ -389,7 +390,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(resp, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(15*time.Second).WithPolling(3*time.Second).ShouldNot(Equal("RUNNING"),
+			}).WithTimeout(15*time.Second).WithPolling(3*time.Second).ShouldNot(Equal(instanceStatusRunning),
 				"instance with invalid image should never reach RUNNING")
 		})
 	})
@@ -439,8 +440,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 						"fields": [
 							{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
 							{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
-							{"path": "resources.cpu.min", "editable": false, "default": 1},
-							{"path": "resources.cpu.max", "editable": false, "default": 1},
+							{"path": "resources.cpu.min", "editable": false, "default": "1"},
+							{"path": "resources.cpu.max", "editable": false, "default": "1"},
 							{"path": "resources.memory.min", "editable": false, "default": "128MB"},
 							{"path": "resources.memory.max", "editable": false, "default": "256MB"}
 						]
@@ -537,7 +538,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 					decodeJSON(resp, &body)
 					s, _ := body["status"].(string)
 					return s
-				}).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal("RUNNING"),
+				}).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal(instanceStatusRunning),
 					"instance %d (resource_id=%s) should reach RUNNING via independent status update", i, rid)
 			}
 		})
@@ -565,7 +566,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				id, _ := i["id"].(string)
 				if ridSet[id] {
 					foundCount++
-					Expect(i["status"]).To(Equal("RUNNING"),
+					Expect(i["status"]).To(Equal(instanceStatusRunning),
 						"instance %s should be RUNNING in list response", id)
 				}
 			}
@@ -686,8 +687,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 						"fields": [
 							{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
 							{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
-							{"path": "resources.cpu.min", "editable": false, "default": 1},
-							{"path": "resources.cpu.max", "editable": false, "default": 1},
+							{"path": "resources.cpu.min", "editable": false, "default": "1"},
+							{"path": "resources.cpu.max", "editable": false, "default": "1"},
 							{"path": "resources.memory.min", "editable": false, "default": "128MB"},
 							{"path": "resources.memory.max", "editable": false, "default": "256MB"}
 						]
@@ -745,7 +746,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(r, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal("RUNNING"),
+			}).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal(instanceStatusRunning),
 				"consumer should still process real events after handling a fake instance ID")
 		})
 	})
@@ -858,8 +859,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 						"fields": [
 							{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
 							{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
-							{"path": "resources.cpu.min", "editable": false, "default": 1},
-							{"path": "resources.cpu.max", "editable": false, "default": 1},
+							{"path": "resources.cpu.min", "editable": false, "default": "1"},
+							{"path": "resources.cpu.max", "editable": false, "default": "1"},
 							{"path": "resources.memory.min", "editable": false, "default": "128MB"},
 							{"path": "resources.memory.max", "editable": false, "default": "256MB"}
 						]
@@ -917,7 +918,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(r, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal("RUNNING"),
+			}).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal(instanceStatusRunning),
 				"consumer should recover from malformed messages and process real events")
 		})
 	})
@@ -963,8 +964,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 						"fields": [
 							{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
 							{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
-							{"path": "resources.cpu.min", "editable": false, "default": 1},
-							{"path": "resources.cpu.max", "editable": false, "default": 1},
+							{"path": "resources.cpu.min", "editable": false, "default": "1"},
+							{"path": "resources.cpu.max", "editable": false, "default": "1"},
 							{"path": "resources.memory.min", "editable": false, "default": "128MB"},
 							{"path": "resources.memory.max", "editable": false, "default": "256MB"}
 						]
@@ -1021,7 +1022,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(r, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"))
+			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal(instanceStatusRunning))
 		})
 
 		AfterAll(func() {
@@ -1067,7 +1068,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(resp, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(15*time.Second).WithPolling(2*time.Second).Should(Equal("RUNNING"),
+			}).WithTimeout(15*time.Second).WithPolling(2*time.Second).Should(Equal(instanceStatusRunning),
 				"status should remain RUNNING without any disruption")
 		})
 	})
@@ -1114,8 +1115,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 						"fields": [
 							{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
 							{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
-							{"path": "resources.cpu.min", "editable": false, "default": 1},
-							{"path": "resources.cpu.max", "editable": false, "default": 1},
+							{"path": "resources.cpu.min", "editable": false, "default": "1"},
+							{"path": "resources.cpu.max", "editable": false, "default": "1"},
 							{"path": "resources.memory.min", "editable": false, "default": "128MB"},
 							{"path": "resources.memory.max", "editable": false, "default": "256MB"}
 						]
@@ -1172,7 +1173,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(r, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"))
+			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal(instanceStatusRunning))
 		})
 
 		AfterAll(func() {
@@ -1277,8 +1278,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 						"fields": [
 							{"path": "metadata.name", "display_name": "Container Name", "editable": true, "default": %q},
 							{"path": "image.reference", "display_name": "Image", "editable": true, "default": "docker.io/library/nginx:alpine"},
-							{"path": "resources.cpu.min", "editable": false, "default": 1},
-							{"path": "resources.cpu.max", "editable": false, "default": 1},
+							{"path": "resources.cpu.min", "editable": false, "default": "1"},
+							{"path": "resources.cpu.max", "editable": false, "default": "1"},
 							{"path": "resources.memory.min", "editable": false, "default": "128MB"},
 							{"path": "resources.memory.max", "editable": false, "default": "256MB"}
 						]
@@ -1335,7 +1336,7 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(r, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"))
+			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal(instanceStatusRunning))
 		})
 
 		AfterAll(func() {
@@ -1409,8 +1410,8 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(r, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(10*time.Second).WithPolling(1*time.Second).Should(Equal(customStatus),
-				"consumer should store arbitrary status values without validation")
+			}).WithTimeout(10*time.Second).WithPolling(1*time.Second).Should(Equal(strings.ToLower(customStatus)),
+				"consumer stores status lowercased; arbitrary values are not rejected")
 		})
 
 		// This tests ordered delivery within a single NATS publisher connection.
@@ -1460,11 +1461,11 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 				decodeJSON(r, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(10*time.Second).WithPolling(1*time.Second).Should(Equal("PENDING"),
+			}).WithTimeout(10*time.Second).WithPolling(1*time.Second).Should(Equal(instanceStatusPending),
 				"consumer should apply last-write-wins — no forward-only constraint on status")
 		})
 
-		It("preserves existing status when an event has an empty status string", func() {
+		It("applies an empty status string from a status event", func() {
 			By("first setting status to a known value")
 			conn, err := nats.Connect(natsURL, nats.Timeout(5*time.Second))
 			Expect(err).NotTo(HaveOccurred())
@@ -1494,17 +1495,17 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			Eventually(func() string {
 				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
 				if e != nil {
-					return ""
+					return "error"
 				}
 				defer r.Body.Close()
 				if r.StatusCode != http.StatusOK {
-					return ""
+					return "error"
 				}
 				var body map[string]interface{}
 				decodeJSON(r, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(10 * time.Second).WithPolling(1 * time.Second).Should(Equal(knownStatus))
+			}).WithTimeout(10 * time.Second).WithPolling(1 * time.Second).Should(Equal(strings.ToLower(knownStatus)))
 
 			By("publishing an event with empty status string")
 			emptyEvent := map[string]interface{}{
@@ -1527,22 +1528,24 @@ var _ = Describe("Status Reader", Label("nats"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			conn.Flush()
 
-			By("verifying the existing status is consistently preserved (GORM skips zero-value fields)")
-			Consistently(func() string {
+			// StatusConsumer always UpdateStatus after ToLower/TrimSpace, and the
+			// store Select("status", "status_message") so an empty string overwrites.
+			By("verifying the API reflects the empty status")
+			Eventually(func() (string, error) {
 				r, e := doRequest(http.MethodGet, "/service-type-instances/"+resourceID, "")
 				if e != nil {
-					return ""
+					return "", e
 				}
 				defer r.Body.Close()
 				if r.StatusCode != http.StatusOK {
-					return ""
+					return "", fmt.Errorf("GET status %d", r.StatusCode)
 				}
 				var body map[string]interface{}
 				decodeJSON(r, &body)
 				s, _ := body["status"].(string)
-				return s
-			}).WithTimeout(5*time.Second).WithPolling(1*time.Second).Should(Equal(knownStatus),
-				"empty status string should be a no-op due to GORM zero-value skip behavior")
+				return s, nil
+			}).WithTimeout(10*time.Second).WithPolling(1*time.Second).Should(Equal(""),
+				"empty status in the CloudEvent is persisted, not treated as a no-op")
 		})
 	})
 
